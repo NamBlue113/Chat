@@ -1,0 +1,190 @@
+-- GUI_CHAT Graduation Project Schema (abridged but complete core)
+DROP DATABASE IF EXISTS gui_chat;
+CREATE DATABASE gui_chat CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE gui_chat;
+
+CREATE TABLE users(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ username VARCHAR(50) NOT NULL UNIQUE,
+ password_hash VARCHAR(255) NOT NULL,
+ display_name VARCHAR(100) NOT NULL,
+ email VARCHAR(150) UNIQUE,
+ avatar_url VARCHAR(500),
+ presence ENUM('ONLINE','OFFLINE','AWAY') DEFAULT 'OFFLINE',
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ last_seen TIMESTAMP NULL
+);
+
+CREATE TABLE user_settings(
+ user_id BIGINT PRIMARY KEY,
+ theme ENUM('LIGHT','DARK') DEFAULT 'LIGHT',
+ language_code VARCHAR(10) DEFAULT 'vi',
+ notification_enabled BOOLEAN DEFAULT TRUE,
+ FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE login_history(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ user_id BIGINT NOT NULL,
+ ip_address VARCHAR(64),
+ device_info VARCHAR(255),
+ login_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ logout_time TIMESTAMP NULL,
+ FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE friend_requests(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ sender_id BIGINT NOT NULL,
+ receiver_id BIGINT NOT NULL,
+ status ENUM('PENDING','ACCEPTED','REJECTED') DEFAULT 'PENDING',
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(sender_id,receiver_id),
+ FOREIGN KEY(sender_id) REFERENCES users(id) ON DELETE CASCADE,
+ FOREIGN KEY(receiver_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE friends(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ user1_id BIGINT NOT NULL,
+ user2_id BIGINT NOT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(user1_id,user2_id),
+ FOREIGN KEY(user1_id) REFERENCES users(id) ON DELETE CASCADE,
+ FOREIGN KEY(user2_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE blocks(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ blocker_id BIGINT NOT NULL,
+ blocked_id BIGINT NOT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(blocker_id,blocked_id),
+ FOREIGN KEY(blocker_id) REFERENCES users(id) ON DELETE CASCADE,
+ FOREIGN KEY(blocked_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE conversations(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ type ENUM('PRIVATE','GROUP') NOT NULL,
+ title VARCHAR(150),
+ avatar_url VARCHAR(500),
+ description VARCHAR(500),
+ owner_id BIGINT NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE conversation_members(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ conversation_id BIGINT NOT NULL,
+ user_id BIGINT NOT NULL,
+ role ENUM('ADMIN','MEMBER') DEFAULT 'MEMBER',
+ joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(conversation_id,user_id),
+ FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+ FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE messages(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ conversation_id BIGINT NOT NULL,
+ sender_id BIGINT NOT NULL,
+ content LONGTEXT,
+ message_type ENUM('TEXT','IMAGE','FILE','VIDEO','VOICE','STICKER') DEFAULT 'TEXT',
+ reply_to_id BIGINT NULL,
+ status ENUM('SENT','DELIVERED','SEEN') DEFAULT 'SENT',
+ is_unsent BOOLEAN DEFAULT FALSE,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+ FOREIGN KEY(sender_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE attachments(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ message_id BIGINT NOT NULL,
+ file_name VARCHAR(255),
+ file_path VARCHAR(500) NOT NULL,
+ mime_type VARCHAR(100),
+ file_size BIGINT,
+ FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
+
+CREATE TABLE file_chunks(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ attachment_id BIGINT NOT NULL,
+ chunk_index INT NOT NULL,
+ chunk_path VARCHAR(500),
+ chunk_size BIGINT,
+ UNIQUE(attachment_id,chunk_index),
+ FOREIGN KEY(attachment_id) REFERENCES attachments(id) ON DELETE CASCADE
+);
+
+CREATE TABLE message_reactions(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ message_id BIGINT NOT NULL,
+ user_id BIGINT NOT NULL,
+ reaction_type ENUM('LIKE','LOVE','HAHA','WOW','SAD','ANGRY'),
+ UNIQUE(message_id,user_id),
+ FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE,
+ FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE message_reads(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ message_id BIGINT NOT NULL,
+ user_id BIGINT NOT NULL,
+ read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(message_id,user_id),
+ FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE,
+ FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE notifications(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ user_id BIGINT NOT NULL,
+ title VARCHAR(255),
+ content TEXT,
+ is_read BOOLEAN DEFAULT FALSE,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE typing_status(
+ conversation_id BIGINT NOT NULL,
+ user_id BIGINT NOT NULL,
+ is_typing BOOLEAN DEFAULT FALSE,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ PRIMARY KEY(conversation_id,user_id),
+ FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+ FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE call_sessions(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ conversation_id BIGINT NOT NULL,
+ initiator_id BIGINT NOT NULL,
+ call_type ENUM('VOICE','VIDEO'),
+ status ENUM('RINGING','ACCEPTED','REJECTED','ENDED','MISSED') DEFAULT 'RINGING',
+ started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ ended_at TIMESTAMP NULL,
+ FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+ FOREIGN KEY(initiator_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE call_participants(
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ call_id BIGINT NOT NULL,
+ user_id BIGINT NOT NULL,
+ joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ left_at TIMESTAMP NULL,
+ UNIQUE(call_id,user_id),
+ FOREIGN KEY(call_id) REFERENCES call_sessions(id) ON DELETE CASCADE,
+ FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_msg_conv_time ON messages(conversation_id,created_at);
+CREATE INDEX idx_msg_sender ON messages(sender_id);
+CREATE INDEX idx_conv_member_user ON conversation_members(user_id);
