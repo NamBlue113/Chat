@@ -205,7 +205,7 @@ public class VideoStreamHandler {
 
     /** Nhận base64 frame từ WebSocket (fallback path). */
     public void onFrame(String b64) {
-        if (!running.get() || remoteView == null) return;
+        if (remoteView == null) return; // không check running — webcam local chưa mở không ảnh hưởng nhận remote
         if (!frameRendering.compareAndSet(false, true)) return;
         try {
             Image img = new Image(new ByteArrayInputStream(Base64.getDecoder().decode(b64)));

@@ -1185,7 +1185,7 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
         boolean isCaller = message.has("caller") && message.get("caller").getAsBoolean();
 
         callSessionId = sessionId;
-        callRelayHost = "127.0.0.1";
+        callRelayHost = extractRelayHost();
         callVoicePort = voicePort;
 
         // Bên gọi (caller) chưa có active call window — server không forward CALL_ACCEPT
@@ -1229,6 +1229,17 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
             voiceCallHandler.prepareForCall();
             voiceCallHandler.startCall(sessionId, callRelayHost, voicePort);
         });
+    }
+
+    private String extractRelayHost() {
+        try {
+            String base = com.messenger.client.config.AppConfig.getBaseUrl().replaceAll("/+$", "");
+            if (base.startsWith("http://") || base.startsWith("https://")) {
+                java.net.URL url = new java.net.URL(base);
+                return url.getHost();
+            }
+        } catch (Exception ignored) {}
+        return "127.0.0.1";
     }
 
     private void showVideoSettings() {
