@@ -142,8 +142,8 @@ public class ChatClient extends Application {
 
         if (Protocol.TYPE_ERROR.equals(type) && mainView == null) {
             String msg = message.has("message") ? message.get("message").getAsString() : "Unknown error";
-            if (loginView != null) loginView.showError(msg);
-            if (registerView != null) registerView.showError(msg);
+            if (loginView != null) loginView.onError(msg);
+            if (registerView != null) registerView.onError(msg);
             return;
         }
 

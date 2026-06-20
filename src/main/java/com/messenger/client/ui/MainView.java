@@ -954,12 +954,10 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
                 root.getChildren().addAll(avatarLbl, nameLbl, timerLbl, ctrlBox);
                 callStage.setScene(new Scene(root, 360, 400));
             } else {
-                // ===== VIDEO CALL =====
+                // ===== VIDEO CALL — Split screen: bản thân trái | đối phương phải =====
                 remoteVideoView = new ImageView();
                 remoteVideoView.setPreserveRatio(true);
                 localVideoView = new ImageView();
-                localVideoView.setFitWidth(160);
-                localVideoView.setFitHeight(120);
                 localVideoView.setPreserveRatio(true);
 
                 videoStreamHandler = new VideoStreamHandler();
@@ -971,37 +969,80 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
                 videoStreamHandler.setErrorListener(msg -> Platform.runLater(() -> showAlert("Video Call Error", msg)));
                 videoStreamHandler.start(callTargetId, false);
 
-                StackPane root = new StackPane();
-                root.setStyle("-fx-background-color: #000000;");
+                // === Pane trái: camera bản thân ===
+                StackPane leftPane = new StackPane();
+                leftPane.setStyle("-fx-background-color: #1A1A2E;");
+                leftPane.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
+                HBox.setHgrow(leftPane, Priority.ALWAYS);
 
-                remoteVideoView.fitWidthProperty().bind(root.widthProperty());
-                remoteVideoView.fitHeightProperty().bind(root.heightProperty());
+                localVideoView.fitWidthProperty().bind(leftPane.widthProperty());
+                localVideoView.fitHeightProperty().bind(leftPane.heightProperty());
+
+                Label noLocalLbl = new Label("📷\nCamera của bạn\nchưa sẵn sàng");
+                noLocalLbl.setStyle("-fx-text-fill: rgba(180,180,180,0.75); -fx-font-size: 15px; -fx-text-alignment: center;");
+                noLocalLbl.setAlignment(Pos.CENTER);
+                localVideoView.imageProperty().addListener((obs, o, n) -> noLocalLbl.setVisible(n == null));
+
+                Label selfTag = new Label("  Bạn  ");
+                selfTag.setStyle("-fx-text-fill: white; -fx-font-size: 12px; -fx-font-weight: bold; " +
+                        "-fx-background-color: rgba(0,0,0,0.5); -fx-padding: 3 10; -fx-background-radius: 4;");
+                StackPane.setAlignment(selfTag, Pos.BOTTOM_LEFT);
+                StackPane.setMargin(selfTag, new Insets(0, 0, 90, 12));
+
+                leftPane.getChildren().addAll(localVideoView, noLocalLbl, selfTag);
+
+                // === Đường kẻ giữa ===
+                Region divider = new Region();
+                divider.setPrefWidth(2);
+                divider.setMinWidth(2);
+                divider.setMaxWidth(2);
+                divider.setMaxHeight(Double.MAX_VALUE);
+                divider.setStyle("-fx-background-color: rgba(255,255,255,0.12);");
+
+                // === Pane phải: camera đối phương ===
+                StackPane rightPane = new StackPane();
+                rightPane.setStyle("-fx-background-color: #0D0D1A;");
+                rightPane.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
+                HBox.setHgrow(rightPane, Priority.ALWAYS);
+
+                remoteVideoView.fitWidthProperty().bind(rightPane.widthProperty());
+                remoteVideoView.fitHeightProperty().bind(rightPane.heightProperty());
 
                 Label noVideoLbl = new Label("📹\n" + callTargetName + "\n\nĐang kết nối...");
                 noVideoLbl.setStyle("-fx-text-fill: rgba(200,200,200,0.85); -fx-font-size: 18px; -fx-text-alignment: center;");
                 noVideoLbl.setAlignment(Pos.CENTER);
                 remoteVideoView.imageProperty().addListener((obs, o, n) -> noVideoLbl.setVisible(n == null));
 
-                StackPane localPane = new StackPane(localVideoView);
-                localPane.setPrefSize(160, 120);
-                localPane.setStyle("-fx-background-color: #1A1A2E; -fx-background-radius: 10; " +
-                        "-fx-border-color: rgba(255,255,255,0.25); -fx-border-radius: 10; -fx-border-width: 1;");
-                StackPane.setAlignment(localPane, Pos.BOTTOM_RIGHT);
-                StackPane.setMargin(localPane, new Insets(0, 16, 88, 0));
+                Label remoteTag = new Label("  " + callTargetName + "  ");
+                remoteTag.setStyle("-fx-text-fill: white; -fx-font-size: 12px; -fx-font-weight: bold; " +
+                        "-fx-background-color: rgba(0,0,0,0.5); -fx-padding: 3 10; -fx-background-radius: 4;");
+                StackPane.setAlignment(remoteTag, Pos.BOTTOM_RIGHT);
+                StackPane.setMargin(remoteTag, new Insets(0, 12, 90, 0));
 
-                // Gradient fade regions (nền trong suốt cho topBar/controlsBar)
+                rightPane.getChildren().addAll(remoteVideoView, noVideoLbl, remoteTag);
+
+                // === Layout 2 cột ===
+                HBox videoLayout = new HBox(0, leftPane, divider, rightPane);
+                videoLayout.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
+
+                // === Root StackPane ===
+                StackPane root = new StackPane(videoLayout);
+                root.setStyle("-fx-background-color: #000000;");
+
+                // Gradient fade overlay (cho topBar/controlsBar đọc được)
                 Region topFade = new Region();
-                topFade.setStyle("-fx-background-color: linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, transparent 100%);");
+                topFade.setStyle("-fx-background-color: linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, transparent 100%);");
                 topFade.setPrefHeight(80);
                 topFade.setMaxWidth(Double.MAX_VALUE);
                 StackPane.setAlignment(topFade, Pos.TOP_CENTER);
 
                 Region bottomFade = new Region();
-                bottomFade.setStyle("-fx-background-color: linear-gradient(to top, rgba(0,0,0,0.55) 0%, transparent 100%);");
+                bottomFade.setStyle("-fx-background-color: linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%);");
                 bottomFade.setPrefHeight(130);
                 bottomFade.setMaxWidth(Double.MAX_VALUE);
                 StackPane.setAlignment(bottomFade, Pos.BOTTOM_CENTER);
 
+                // Top bar: tên + timer
                 HBox topBar = new HBox(4);
                 topBar.setPadding(new Insets(14, 18, 14, 18));
                 topBar.setAlignment(Pos.CENTER_LEFT);
@@ -1025,11 +1066,12 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
                 timerThread.start();
                 topBar.getChildren().addAll(topNameLbl, topTimerLbl);
 
+                // Controls bar: mute, kết thúc, camera, cài đặt
                 HBox controlsBar = new HBox(24);
                 controlsBar.setAlignment(Pos.CENTER);
                 controlsBar.setPadding(new Insets(14, 24, 20, 24));
                 controlsBar.setStyle("-fx-background-color: transparent;");
-                controlsBar.setMaxWidth(360);
+                controlsBar.setMaxWidth(400);
                 StackPane.setAlignment(controlsBar, Pos.BOTTOM_CENTER);
 
                 String circleV = "-fx-text-fill: white; -fx-background-radius: 50%; -fx-min-width: 52; -fx-min-height: 52; -fx-max-width: 52; -fx-max-height: 52; -fx-font-size: 20px; -fx-cursor: hand;";
@@ -1050,12 +1092,13 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
                         "-fx-min-width: 62; -fx-min-height: 62; -fx-max-width: 62; -fx-max-height: 62; " +
                         "-fx-font-size: 24px; -fx-cursor: hand; -fx-rotate: 135;");
                 endBtnV.setOnAction(e -> endCall());
+
                 Button settingsBtnVid = new Button("⚙");
                 settingsBtnVid.setStyle("-fx-background-color: rgba(255,255,255,0.18); " + circleV);
                 settingsBtnVid.setOnAction(e -> showCallSettings(true));
                 controlsBar.getChildren().addAll(muteBtnV, endBtnV, camBtn, settingsBtnVid);
 
-                // Auto-hide controls sau 3 giây
+                // Auto-hide controls sau 3 giây không di chuột
                 PauseTransition hideTimer = new PauseTransition(Duration.seconds(3));
                 hideTimer.setOnFinished(e -> { controlsBar.setVisible(false); topBar.setVisible(false); });
                 root.setOnMouseMoved(e -> {
@@ -1065,9 +1108,9 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
                 });
                 hideTimer.play();
 
-                root.getChildren().addAll(remoteVideoView, noVideoLbl, topFade, bottomFade, topBar, localPane, controlsBar);
+                root.getChildren().addAll(topFade, bottomFade, topBar, controlsBar);
                 callStage.setMaximized(true);
-                callStage.setScene(new Scene(root, 900, 650));
+                callStage.setScene(new Scene(root, 1000, 650));
             }
 
             callStage.setOnCloseRequest(e -> endCall());
