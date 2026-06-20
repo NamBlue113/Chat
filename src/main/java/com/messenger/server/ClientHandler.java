@@ -887,6 +887,7 @@ public class ClientHandler implements Runnable {
             relayInfoA.addProperty("sessionId", sessionId);
             relayInfoA.addProperty("voicePort", MediaRelayServer.VOICE_RELAY_PORT);
             relayInfoA.addProperty("videoPort", MediaRelayServer.VIDEO_RELAY_PORT);
+            relayInfoA.addProperty("mediaTcpPort", MediaRelayServer.MEDIA_TCP_PORT);
             relayInfoA.addProperty("isVideo", isVideo);
             relayInfoA.addProperty("targetId", targetId);
             relayInfoA.addProperty("senderId", userId);
@@ -900,6 +901,7 @@ public class ClientHandler implements Runnable {
             relayInfoB.addProperty("sessionId", sessionId);
             relayInfoB.addProperty("voicePort", MediaRelayServer.VOICE_RELAY_PORT);
             relayInfoB.addProperty("videoPort", MediaRelayServer.VIDEO_RELAY_PORT);
+            relayInfoB.addProperty("mediaTcpPort", MediaRelayServer.MEDIA_TCP_PORT);
             relayInfoB.addProperty("isVideo", isVideo);
             relayInfoB.addProperty("targetId", userId);
             relayInfoB.addProperty("senderId", targetId);

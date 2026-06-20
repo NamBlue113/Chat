@@ -94,6 +94,7 @@ public class ChatTab {
 
     // Search
     private TextField searchField;
+    private HBox searchWrap;
     private ListView<String> searchResultView;
     private final ObservableList<String> searchItems = FXCollections.observableArrayList();
     private final Map<Integer, JsonObject> searchIndex = new HashMap<>();
@@ -151,7 +152,23 @@ public class ChatTab {
     }
     public void updatePresence(long uid, boolean online) {
         ConvItem c = convMap.get(uid);
-        if (c != null) { c.online = online; listView.refresh(); }
+        if (c == null) return;
+        Platform.runLater(() -> {
+            c.online = online;
+            listView.refresh();
+            // Đồng bộ header nếu đang mở conversation này
+            if (active != null && active.uid == uid) {
+                if (online) {
+                    hdrStatus.setText("● Đang hoạt động");
+                    hdrStatus.setStyle("-fx-text-fill:#31D158; -fx-font-size: 12px;");
+                } else {
+                    hdrStatus.setText("Không hoạt động");
+                    hdrStatus.setStyle("-fx-text-fill:#65676B; -fx-font-size: 12px;");
+                }
+                hdrAvatar.getChildren().clear();
+                hdrAvatar.getChildren().add(makeAvatar(c.initials, c.avatarColor, 38, online, c.avatarUrl));
+            }
+        });
     }
     public void highlightConversation(long uid) {
         ConvItem c = convMap.get(uid);
@@ -228,11 +245,50 @@ public class ChatTab {
             if (!keyword.isEmpty()) callback.onSearch(keyword);
         });
 
-        // Dropdown kết quả tìm kiếm
+        // Dropdown kết quả tìm kiếm — cell có avatar + tên + trạng thái
         searchResultView = new ListView<>(searchItems);
         searchResultView.setPrefHeight(200);
-        searchResultView.setMaxHeight(200);
-        searchResultView.getStyleClass().add("search-result-list");
+        searchResultView.setMaxHeight(280);
+        searchResultView.setStyle(
+            "-fx-background-color: #25272D; -fx-background-radius: 8;" +
+            "-fx-border-color: #3A3D46; -fx-border-width: 1; -fx-border-radius: 8;");
+        searchResultView.setCellFactory(lv -> new ListCell<String>() {
+            @Override protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) { setGraphic(null); setText(null); return; }
+                JsonObject user = searchIndex.get(getIndex());
+                if (user == null) { setText(item); return; }
+                String nm = user.has("displayName") ? user.get("displayName").getAsString()
+                          : user.get("username").getAsString();
+                String un = user.has("username") ? user.get("username").getAsString() : "";
+                boolean isOn = "ONLINE".equals(user.has("presence") ? user.get("presence").getAsString() : "");
+                String ini = nm.length() >= 2 ? nm.substring(0,2).toUpperCase() : nm.substring(0,1).toUpperCase();
+                javafx.scene.shape.Circle avBg = new javafx.scene.shape.Circle(18, javafx.scene.paint.Color.rgb(0, 132, 255));
+                Label avLbl = new Label(ini);
+                avLbl.setFont(Font.font("SansSerif", FontWeight.BOLD, 10));
+                avLbl.setTextFill(javafx.scene.paint.Color.WHITE);
+                StackPane avBase = new StackPane(avBg, avLbl);
+                avBase.setMinSize(36, 36); avBase.setMaxSize(36, 36);
+                javafx.scene.shape.Circle dot = new javafx.scene.shape.Circle(5,
+                    isOn ? javafx.scene.paint.Color.rgb(49, 209, 88)
+                         : javafx.scene.paint.Color.rgb(100, 100, 110));
+                StackPane.setAlignment(dot, Pos.BOTTOM_RIGHT);
+                StackPane av = new StackPane(avBase, dot);
+                av.setMinSize(36, 36); av.setMaxSize(36, 36);
+                Label nameLbl = new Label(nm);
+                nameLbl.setFont(Font.font("SansSerif", FontWeight.BOLD, 13));
+                nameLbl.setTextFill(javafx.scene.paint.Color.WHITE);
+                Label userLbl = new Label("@" + un);
+                userLbl.setFont(Font.font("SansSerif", 11));
+                userLbl.setTextFill(javafx.scene.paint.Color.rgb(120, 120, 140));
+                VBox info = new VBox(2, nameLbl, userLbl);
+                HBox row = new HBox(10, av, info);
+                row.setAlignment(Pos.CENTER_LEFT);
+                row.setPadding(new Insets(4, 8, 4, 8));
+                setGraphic(row); setText(null);
+                setStyle("-fx-background-color: transparent; -fx-padding: 0;");
+            }
+        });
         searchResultView.setOnMouseClicked(ev -> {
             int idx = searchResultView.getSelectionModel().getSelectedIndex();
             if (idx >= 0 && searchIndex.containsKey(idx)) {
@@ -246,7 +302,7 @@ public class ChatTab {
 
         Label searchIcon = new Label("\uD83D\uDD0D");
         searchIcon.getStyleClass().add("search-icon");
-        HBox searchWrap = new HBox(8, searchIcon, searchField);
+        searchWrap = new HBox(8, searchIcon, searchField);
         searchWrap.setAlignment(Pos.CENTER_LEFT);
         searchWrap.getStyleClass().add("search-wrapper");
         HBox.setHgrow(searchField, Priority.ALWAYS);
@@ -320,9 +376,21 @@ public class ChatTab {
 
         // Messages
         msgArea = new VBox(4); msgArea.setPadding(new Insets(10));
-        Label eh = new Label("Ch\u1ECDn m\u1ED9t \u0111o\u1EA1n chat \u0111\u1EC3 b\u1EAFt \u0111\u1EA7u"); eh.getStyleClass().add("chat-empty-hint"); eh.setPadding(new Insets(40)); eh.setMaxWidth(Double.MAX_VALUE); eh.setAlignment(Pos.CENTER); msgArea.getChildren().add(eh);
+        msgArea.getChildren().add(buildChatEmptyState());
         msgScroll = new ScrollPane(msgArea); msgScroll.setFitToWidth(true); msgScroll.getStyleClass().add("chat-message-list");
-        VBox.setVgrow(msgScroll,Priority.ALWAYS); ca.getChildren().add(msgScroll);
+
+        // N\u00FAt scroll xu\u1ED1ng cu\u1ED1i (C2)
+        Button scrollDownBtn = new Button("\u2B07");
+        scrollDownBtn.getStyleClass().add("scroll-down-btn");
+        scrollDownBtn.setVisible(false);
+        scrollDownBtn.setOnAction(e -> msgScroll.setVvalue(1.0));
+        StackPane msgScrollWrapper = new StackPane(msgScroll, scrollDownBtn);
+        StackPane.setAlignment(scrollDownBtn, Pos.BOTTOM_RIGHT);
+        StackPane.setMargin(scrollDownBtn, new Insets(0, 24, 24, 0));
+        msgScroll.vvalueProperty().addListener((obs, oldVal, newVal) ->
+            scrollDownBtn.setVisible(newVal.doubleValue() < 0.92));
+        VBox.setVgrow(msgScrollWrapper, Priority.ALWAYS);
+        ca.getChildren().add(msgScrollWrapper);
 
         typingLbl = new Label(""); typingLbl.getStyleClass().add("typing-indicator"); typingLbl.setPadding(new Insets(2,15,2,15)); ca.getChildren().add(typingLbl);
 
@@ -489,12 +557,17 @@ public class ChatTab {
                 return;
             }
 
-            // Hiển thị popup ngay dưới search wrap
-            if (!searchPopup.isShowing()) {
-                javafx.geometry.Bounds b = searchField.localToScreen(searchField.getBoundsInLocal());
-                searchPopup.show(searchField, b.getMinX(), b.getMaxY());
+            // Hiển thị popup ngay dưới search wrap, căn theo chiều rộng của wrapper
+            javafx.geometry.Bounds b = searchWrap != null
+                ? searchWrap.localToScreen(searchWrap.getBoundsInLocal())
+                : searchField.localToScreen(searchField.getBoundsInLocal());
+            if (b != null) {
+                searchResultView.setPrefWidth(b.getWidth());
+                if (!searchPopup.isShowing()) {
+                    searchPopup.show(searchField.getScene().getWindow(), b.getMinX(), b.getMaxY() + 2);
+                }
             }
-            searchResultView.setPrefHeight(Math.min(240, searchItems.size() * 40 + 10));
+            searchResultView.setPrefHeight(Math.min(280, searchItems.size() * 56 + 8));
         });
     }
 
@@ -707,22 +780,53 @@ public class ChatTab {
     public void handleReaction(JsonObject m) {
         long mid = m.has("messageId") ? m.get("messageId").getAsLong() : -1;
         String r = m.has("reaction") ? m.get("reaction").getAsString() : "";
-        for (javafx.scene.Node n : msgArea.getChildren()) {
-            if (n instanceof HBox) {
+        Platform.runLater(() -> {
+            for (javafx.scene.Node n : msgArea.getChildren()) {
+                if (!(n instanceof HBox)) continue;
                 HBox row = (HBox) n;
                 Object o = row.getProperties().get("msgId");
-                if (o != null && o.equals(mid)) {
-                    // Tìm hoặc tạo reaction chip box
-                    VBox bubble = (VBox) row.getChildren().get(0);
-                    Label rl = new Label(r);
-                    rl.getStyleClass().add("reaction-chip");
-                    rl.setPadding(new Insets(1, 6, 1, 6));
-                    rl.setFont(Font.font(11));
-                    bubble.getChildren().add(rl);
-                    break;
+                if (o == null || !o.equals(mid)) continue;
+
+                // Tìm VBox bubble (có thể ở index 0 hoặc 1 tùy có avatar hay không)
+                VBox bubble = null;
+                for (javafx.scene.Node child : row.getChildren()) {
+                    if (child instanceof VBox) { bubble = (VBox) child; break; }
                 }
+                if (bubble == null) break;
+
+                // Tìm hoặc tạo reaction bar (HBox với style class "reaction-bar")
+                HBox reactionBar = null;
+                for (javafx.scene.Node child : bubble.getChildren()) {
+                    if (child instanceof HBox && child.getStyleClass().contains("reaction-bar")) {
+                        reactionBar = (HBox) child; break;
+                    }
+                }
+                if (reactionBar == null) {
+                    reactionBar = new HBox(4);
+                    reactionBar.getStyleClass().add("reaction-bar");
+                    reactionBar.setPadding(new Insets(2, 0, 0, 0));
+                    // Chèn trước statusRow (phần tử HBox cuối cùng)
+                    int insertIdx = bubble.getChildren().size();
+                    for (int i = bubble.getChildren().size() - 1; i >= 0; i--) {
+                        if (bubble.getChildren().get(i) instanceof HBox) { insertIdx = i; break; }
+                    }
+                    bubble.getChildren().add(insertIdx, reactionBar);
+                }
+
+                // Kiểm tra reaction đã tồn tại chưa (tránh duplicate)
+                final HBox bar = reactionBar;
+                boolean exists = bar.getChildren().stream()
+                    .anyMatch(c -> c instanceof Label && ((Label) c).getText().equals(r));
+                if (!exists) {
+                    Label chip = new Label(r);
+                    chip.getStyleClass().add("reaction-chip");
+                    chip.setPadding(new Insets(1, 6, 1, 6));
+                    chip.setFont(Font.font(13));
+                    bar.getChildren().add(chip);
+                }
+                break;
             }
-        }
+        });
     }
 
     public void handleSuccess(JsonObject m) {
@@ -859,10 +963,7 @@ public class ChatTab {
             msgArea.getChildren().clear();
             boolean hasMessages = messages != null && messages.size() > 0;
             if (!hasMessages) {
-                Label eh = new Label("Ch\u01B0a c\u00F3 tin nh\u1EAFn n\u00E0o");
-                eh.getStyleClass().add("chat-empty-hint"); eh.setPadding(new Insets(40));
-                eh.setMaxWidth(Double.MAX_VALUE); eh.setAlignment(Pos.CENTER);
-                msgArea.getChildren().add(eh);
+                msgArea.getChildren().add(buildNoMessageState());
                 return;
             }
             // Messages come in reverse chronological order from server; display oldest first
@@ -923,7 +1024,7 @@ public class ChatTab {
     private void bubble(String senderName, String content, long timestamp, boolean mine,
                         long friendId, String messageType, String status, long messageId,
                         String replyToContent, String replyToSender) {
-        msgArea.getChildren().removeIf(n -> n instanceof Label && ((Label)n).getText().contains("Ch\u1ECDn m\u1ED9t \u0111o\u1EA1n chat"));
+        msgArea.getChildren().removeIf(n -> n.getStyleClass().contains("chat-empty-state"));
 
         // Lưu vào lịch sử local
         if (friendId > 0) {
@@ -1001,6 +1102,11 @@ public class ChatTab {
         if (mine) {
             Label statusIcon = new Label(getStatusIcon(status));
             statusIcon.getStyleClass().add("bubble-status-icon");
+            if ("SEEN".equals(status)) {
+                statusIcon.setStyle("-fx-text-fill: #31D158; -fx-font-size: 10px; -fx-font-weight: bold;");
+            } else if ("DELIVERED".equals(status)) {
+                statusIcon.setStyle("-fx-text-fill: rgba(255,255,255,0.65); -fx-font-size: 10px; -fx-font-weight: bold;");
+            }
             statusRow.getChildren().add(statusIcon);
         }
         bubbleBox.getChildren().add(statusRow);
@@ -1183,33 +1289,89 @@ public class ChatTab {
     }
 
     private void showImageViewer(String imageSource) {
-        if (imageSource == null || imageSource.isEmpty())
-            return;
+        if (imageSource == null || imageSource.isEmpty()) return;
         Stage viewer = new Stage();
         viewer.initOwner(client.getPrimaryStage());
-        viewer.setTitle("Anh");
+        viewer.setTitle("Xem \u1ea3nh \u2014 Moji Messenger");
 
         StackPane root = new StackPane();
-        root.setStyle("-fx-background-color: #000000;");
+        root.setStyle("-fx-background-color: #0A0A0A;");
         Image img = new Image(imageSource, false);
-        if (img.isError())
-            return;
+        if (img.isError()) return;
+
         ImageView full = new ImageView(img);
         full.setPreserveRatio(true);
-        full.fitWidthProperty().bind(root.widthProperty());
-        full.fitHeightProperty().bind(root.heightProperty());
+        full.fitWidthProperty().bind(root.widthProperty().subtract(24));
+        full.fitHeightProperty().bind(root.heightProperty().subtract(64));
 
-        Button close = new Button("\u2715");
-        close.setStyle(
-                "-fx-background-color: rgba(30,30,30,0.8); -fx-text-fill: white; -fx-font-size: 18px; -fx-background-radius: 18; -fx-padding: 612;");
-        close.setOnAction(e -> viewer.close());
-        StackPane.setAlignment(close, Pos.TOP_RIGHT);
-        StackPane.setMargin(close, new Insets(18));
+        // Zoom b\u1eb1ng scroll chu\u1ed9t
+        final double[] scale = {1.0};
+        root.setOnScroll(e -> {
+            double delta = e.getDeltaY() > 0 ? 1.12 : 0.89;
+            scale[0] = Math.max(0.15, Math.min(10.0, scale[0] * delta));
+            full.setScaleX(scale[0]);
+            full.setScaleY(scale[0]);
+        });
 
-        root.getChildren().addAll(full, close);
-        viewer.setScene(new Scene(root, 900, 650));
+        // Toolbar tr\u00ean c\u00f9ng
+        HBox toolbar = new HBox(8);
+        toolbar.setAlignment(Pos.CENTER_LEFT);
+        toolbar.setPadding(new Insets(10, 16, 10, 16));
+        toolbar.setStyle("-fx-background-color: rgba(0,0,0,0.75);");
+
+        String btnStyle = "-fx-background-color: rgba(255,255,255,0.12); -fx-text-fill: white; " +
+                "-fx-background-radius: 8; -fx-padding: 6 12; -fx-cursor: hand; -fx-font-size: 13px;";
+
+        Button zoomInBtn  = new Button("\ud83d\udd0d +");   zoomInBtn.setStyle(btnStyle);
+        Button zoomOutBtn = new Button("\ud83d\udd0d \u2212");   zoomOutBtn.setStyle(btnStyle);
+        Button resetBtn   = new Button("\u21ba Reset"); resetBtn.setStyle(btnStyle);
+        Button dlBtn      = new Button("\u2b07 T\u1ea3i v\u1ec1"); dlBtn.setStyle(btnStyle);
+
+        zoomInBtn.setOnAction(e  -> { scale[0] = Math.min(10.0, scale[0] * 1.2); full.setScaleX(scale[0]); full.setScaleY(scale[0]); });
+        zoomOutBtn.setOnAction(e -> { scale[0] = Math.max(0.15, scale[0] / 1.2); full.setScaleX(scale[0]); full.setScaleY(scale[0]); });
+        resetBtn.setOnAction(e   -> { scale[0] = 1.0; full.setScaleX(1.0); full.setScaleY(1.0); });
+        dlBtn.setOnAction(e      -> downloadViewedImage(imageSource, viewer));
+
+        Region spacer = new Region(); HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        Button closeBtn = new Button("\u2715 \u0110\u00f3ng");
+        closeBtn.setStyle("-fx-background-color: rgba(229,72,77,0.88); -fx-text-fill: white; " +
+                "-fx-background-radius: 8; -fx-padding: 6 14; -fx-cursor: hand; -fx-font-size: 13px; -fx-font-weight: bold;");
+        closeBtn.setOnAction(e -> viewer.close());
+
+        toolbar.getChildren().addAll(zoomOutBtn, resetBtn, zoomInBtn, dlBtn, spacer, closeBtn);
+        StackPane.setAlignment(toolbar, Pos.TOP_CENTER);
+        root.getChildren().addAll(full, toolbar);
+
+        viewer.setScene(new Scene(root, 900, 680));
         viewer.setMaximized(true);
         viewer.show();
+    }
+
+    private void downloadViewedImage(String imageSource, Stage owner) {
+        FileChooser fc = new FileChooser();
+        fc.setTitle("L\u01b0u \u1ea3nh");
+        fc.setInitialFileName("moji_" + System.currentTimeMillis() + ".png");
+        fc.getExtensionFilters().addAll(
+            new ExtensionFilter("PNG Image", "*.png"),
+            new ExtensionFilter("JPEG Image", "*.jpg")
+        );
+        File target = fc.showSaveDialog(owner);
+        if (target == null) return;
+        new Thread(() -> {
+            try {
+                if (imageSource.startsWith("data:image")) {
+                    String b64 = imageSource.substring(imageSource.indexOf(',') + 1);
+                    byte[] bytes = Base64.getDecoder().decode(b64);
+                    Files.write(target.toPath(), bytes);
+                    Platform.runLater(() -> callback.showAlert("\u0110\u00e3 l\u01b0u \u1ea3nh", "\u1ea2nh \u0111\u00e3 l\u01b0u t\u1ea1i:\n" + target.getAbsolutePath()));
+                } else {
+                    Platform.runLater(() -> callback.showAlert("L\u01b0u \u1ea3nh", "Kh\u00f4ng th\u1ec3 t\u1ea3i \u1ea3nh t\u1eeb URL n\u00e0y. Vui l\u00f2ng ch\u1ee5p m\u00e0n h\u00ecnh th\u1ee7 c\u00f4ng."));
+                }
+            } catch (Exception ex) {
+                Platform.runLater(() -> callback.showAlert("L\u1ed7i", "Kh\u00f4ng th\u1ec3 l\u01b0u \u1ea3nh: " + ex.getMessage()));
+            }
+        }, "img-dl").start();
     }
 
     private void downloadFileMessage(String content) {
@@ -1511,6 +1673,74 @@ public class ChatTab {
 
     private String fmtSz(long sz) { if(sz<1024)return sz+" B"; if(sz<1048576)return String.format("%.1f KB",sz/1024.0); return String.format("%.1f MB",sz/1048576.0); }
 
+    public void addCallHistoryBubble(boolean isVideo, boolean missed, long durationSec) {
+        if (active == null) return;
+        Platform.runLater(() -> {
+            msgArea.getChildren().removeIf(n -> n.getStyleClass().contains("chat-empty-state"));
+            String icon = missed ? "📵" : (isVideo ? "📹" : "📞");
+            String text;
+            if (missed) {
+                text = icon + "  Cuộc gọi nhỡ";
+            } else {
+                text = icon + "  " + (isVideo ? "Cuộc gọi video" : "Cuộc gọi thoại")
+                        + " · " + String.format("%02d:%02d", durationSec / 60, durationSec % 60);
+            }
+            HBox row = new HBox();
+            row.setAlignment(Pos.CENTER);
+            row.setPadding(new Insets(6, 14, 6, 14));
+
+            Label callLbl = new Label(text);
+            callLbl.getStyleClass().add(missed ? "call-bubble-missed" : "call-bubble-ended");
+            callLbl.setPadding(new Insets(7, 18, 7, 18));
+
+            Label timeLbl = new Label("  " + timeFmt.format(new java.util.Date()));
+            timeLbl.getStyleClass().add("bubble-time-theirs");
+
+            HBox pill = new HBox(0, callLbl, timeLbl);
+            pill.setAlignment(Pos.CENTER_LEFT);
+            pill.setStyle("-fx-background-color: rgba(128,128,128,0.1); -fx-background-radius: 20; -fx-padding: 0 8 0 0;");
+            row.getChildren().add(pill);
+            msgArea.getChildren().add(row);
+            Platform.runLater(() -> msgScroll.setVvalue(1.0));
+        });
+    }
+
+    private VBox buildChatEmptyState() {
+        VBox box = new VBox(14);
+        box.getStyleClass().add("chat-empty-state");
+        box.setAlignment(Pos.CENTER);
+        box.setPadding(new Insets(70, 40, 40, 40));
+        box.setMaxWidth(Double.MAX_VALUE);
+        Label icon = new Label("💬");
+        icon.setFont(Font.font(52));
+        Label title = new Label("Moji Messenger");
+        title.setFont(Font.font("SansSerif", FontWeight.BOLD, 20));
+        title.getStyleClass().add("chat-empty-title");
+        Label hint = new Label("Chọn một cuộc trò chuyện để bắt đầu\nhoặc tìm kiếm người dùng mới");
+        hint.getStyleClass().add("chat-empty-hint");
+        hint.setAlignment(Pos.CENTER);
+        hint.setWrapText(true);
+        hint.setMaxWidth(300);
+        box.getChildren().addAll(icon, title, hint);
+        return box;
+    }
+
+    private VBox buildNoMessageState() {
+        VBox box = new VBox(12);
+        box.getStyleClass().add("chat-empty-state");
+        box.setAlignment(Pos.CENTER);
+        box.setPadding(new Insets(60, 40, 40, 40));
+        box.setMaxWidth(Double.MAX_VALUE);
+        Label icon = new Label("✉️");
+        icon.setFont(Font.font(44));
+        Label hint = new Label("Chưa có tin nhắn nào\nHãy gửi tin nhắn đầu tiên!");
+        hint.getStyleClass().add("chat-empty-hint");
+        hint.setAlignment(Pos.CENTER);
+        hint.setWrapText(true);
+        box.getChildren().addAll(icon, hint);
+        return box;
+    }
+
     private void setTT(javafx.scene.Node n, String t) {
         if(t==null||t.isEmpty()) return;
         Tooltip tt = new Tooltip(t); tt.setStyle("-fx-background-color: #2C2F45; -fx-text-fill: #E0E0E0; -fx-background-radius: 6; -fx-padding: 6 10; -fx-font-size: 12px;");
@@ -1558,7 +1788,10 @@ public class ChatTab {
             if(c.unread>0){ ub.setText(String.valueOf(c.unread)); ub.setVisible(true); } else ub.setVisible(false);
             // Hover menu
             menuBtn.setVisible(false);
-            menuBtn.setOnMouseClicked(ev -> showConvMenu(c, menuBtn));
+            menuBtn.setOnMouseClicked(ev -> {
+                ev.consume();
+                showConvMenu(c, ev.getScreenX(), ev.getScreenY());
+            });
             setGraphic(cell);
         }
 
@@ -1861,7 +2094,7 @@ public class ChatTab {
         dialog.show();
     }
 
-    private void showConvMenu(ConvItem c, javafx.scene.Node anchor) {
+    private void showConvMenu(ConvItem c, double screenX, double screenY) {
         ContextMenu menu = new ContextMenu();
         MenuItem rename = new MenuItem("\u270F\uFE0F \u0110\u1ED5i t\u00EAn");
         rename.setOnAction(e -> {
@@ -1901,6 +2134,7 @@ public class ChatTab {
             });
             menu.getItems().add(1, leave);
         }
-        menu.show(anchor, javafx.geometry.Side.BOTTOM, 0, 0);
+        // Hi\u1EC7n menu t\u1EA1i v\u1ECB tr\u00ED c\u1ED1 \u0111\u1ECBnh s\u00E1t n\u00FAt "..." (t\u1ECDa \u0111\u1ED9 m\u00E0n h\u00ECnh)
+        menu.show(listView.getScene().getWindow(), screenX, screenY);
     }
 }

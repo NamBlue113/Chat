@@ -47,6 +47,7 @@ com\messenger\server\service\AuthService$RegisterResult.class
 com\messenger\client\ui\tabs\ContactsTab.class
 com\messenger\client\net\RealtimeClient$1.class
 com\messenger\server\service\MessageService.class
+com\messenger\client\call\TcpVideoClient.class
 com\messenger\client\ui\tabs\ChatTab$1.class
 com\messenger\server\db\DatabaseManager.class
 com\messenger\client\ui\tabs\ChatTab$ConvCell.class
@@ -55,6 +56,7 @@ com\messenger\client\call\VideoCallHandler.class
 com\messenger\client\ChatClient.class
 com\messenger\server\WsChatServer$WsSession.class
 com\messenger\client\ui\StickerManager.class
+com\messenger\server\MediaRelayServer$TcpRelaySession.class
 com\messenger\client\ui\tabs\ProfileTab.class
 com\messenger\server\MediaRelayServer.class
 com\messenger\shared\model\User.class

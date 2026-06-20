@@ -442,7 +442,55 @@
 
 .chat-empty-hint {
     -fx-text-fill: -text-muted;
-    -fx-font-size: 15px;
+    -fx-font-size: 14px;
+    -fx-text-alignment: center;
+}
+
+.chat-empty-title {
+    -fx-text-fill: -text-main;
+    -fx-font-size: 20px;
+    -fx-font-weight: bold;
+}
+
+/* Nút scroll xuống cuối chat */
+.scroll-down-btn {
+    -fx-background-color: -primary;
+    -fx-text-fill: white;
+    -fx-background-radius: 50%;
+    -fx-min-width: 38;
+    -fx-min-height: 38;
+    -fx-max-width: 38;
+    -fx-max-height: 38;
+    -fx-font-size: 16px;
+    -fx-cursor: hand;
+    -fx-effect: dropshadow(gaussian, rgba(0, 104, 255, 0.35), 10, 0, 0, 3);
+}
+
+.scroll-down-btn:hover {
+    -fx-background-color: -primary-hover;
+}
+
+/* ---------- Call History Bubbles ---------- */
+.call-bubble-ended {
+    -fx-background-color: rgba(28, 176, 64, 0.12);
+    -fx-text-fill: #1CB040;
+    -fx-background-radius: 20;
+    -fx-font-size: 13px;
+    -fx-font-weight: bold;
+    -fx-border-color: rgba(28, 176, 64, 0.3);
+    -fx-border-radius: 20;
+    -fx-border-width: 1;
+}
+
+.call-bubble-missed {
+    -fx-background-color: rgba(229, 72, 77, 0.10);
+    -fx-text-fill: #C93539;
+    -fx-background-radius: 20;
+    -fx-font-size: 13px;
+    -fx-font-weight: bold;
+    -fx-border-color: rgba(229, 72, 77, 0.3);
+    -fx-border-radius: 20;
+    -fx-border-width: 1;
 }
 
 /* ---------- Message Bubbles ---------- */
@@ -654,6 +702,25 @@
     -fx-border-color: -border-soft;
     -fx-border-radius: 12;
     -fx-border-width: 1;
+}
+
+/* Reaction chip hiển thị inline dưới bubble */
+.reaction-chip {
+    -fx-background-color: rgba(0, 0, 0, 0.07);
+    -fx-background-radius: 10;
+    -fx-border-color: rgba(0, 0, 0, 0.10);
+    -fx-border-radius: 10;
+    -fx-border-width: 1;
+    -fx-padding: 1 6;
+    -fx-font-size: 13px;
+    -fx-max-height: 22;
+    -fx-alignment: center;
+    -fx-text-fill: -text-main;
+    -fx-cursor: hand;
+}
+
+.reaction-bar {
+    -fx-alignment: center-left;
 }
 
 .context-menu {

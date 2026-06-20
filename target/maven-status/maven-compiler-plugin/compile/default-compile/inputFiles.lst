@@ -31,6 +31,7 @@ D:\Java\FinalTest\Chat\src\main\java\com\messenger\client\ServerConnection.java
 D:\Java\FinalTest\Chat\src\main\java\com\messenger\client\ui\tabs\ProfileTab.java
 D:\Java\FinalTest\Chat\src\main\java\com\messenger\client\ui\StickerManager.java
 D:\Java\FinalTest\Chat\src\main\java\com\messenger\server\service\AuthService.java
+D:\Java\FinalTest\Chat\src\main\java\com\messenger\client\call\TcpVideoClient.java
 D:\Java\FinalTest\Chat\src\main\java\com\messenger\shared\model\FriendRequest.java
 D:\Java\FinalTest\Chat\src\main\java\com\messenger\server\service\MessageService.java
 D:\Java\FinalTest\Chat\src\main\java\com\messenger\server\MediaRelayServer.java

@@ -539,6 +539,7 @@ public class WsChatServer extends WebSocketServer {
             riA.addProperty("type","RELAY_INFO"); riA.addProperty("sessionId",sid);
             riA.addProperty("voicePort",MediaRelayServer.VOICE_RELAY_PORT);
             riA.addProperty("videoPort",MediaRelayServer.VIDEO_RELAY_PORT);
+            riA.addProperty("mediaTcpPort", MediaRelayServer.MEDIA_TCP_PORT);
             riA.addProperty("isVideo",isVideo); riA.addProperty("targetId",tid);
             riA.addProperty("senderId",s.userId); riA.addProperty("senderName",s.username);
             riA.addProperty("caller",true);
@@ -549,6 +550,7 @@ public class WsChatServer extends WebSocketServer {
             riB.addProperty("type","RELAY_INFO"); riB.addProperty("sessionId",sid);
             riB.addProperty("voicePort",MediaRelayServer.VOICE_RELAY_PORT);
             riB.addProperty("videoPort",MediaRelayServer.VIDEO_RELAY_PORT);
+            riB.addProperty("mediaTcpPort", MediaRelayServer.MEDIA_TCP_PORT);
             riB.addProperty("isVideo",isVideo); riB.addProperty("targetId",s.userId);
             riB.addProperty("senderId",tid); riB.addProperty("senderName",s.username);
             riB.addProperty("caller",false);

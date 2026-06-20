@@ -16,6 +16,7 @@ public final class Protocol {
     public static final int VOICE_PORT = 9001;
     public static final int VIDEO_PORT = 9002;
     public static final int FILE_PORT = 9003;
+    public static final int MEDIA_TCP_PORT = 9004;
 
     // ==================== Message Types ====================
 

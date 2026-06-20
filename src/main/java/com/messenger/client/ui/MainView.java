@@ -4,6 +4,7 @@ import com.google.gson.*;
 import com.messenger.client.ChatClient;
 import com.messenger.client.call.VoiceCallHandler;
 import com.messenger.client.call.VideoStreamHandler;
+import com.messenger.client.call.TcpVideoClient;
 import com.messenger.client.ui.tabs.ChatTab;
 import com.messenger.client.ui.tabs.ContactsTab;
 import com.messenger.client.ui.tabs.ProfileTab;
@@ -16,12 +17,13 @@ import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
+import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
-import java.util.List;
-
+import javafx.animation.PauseTransition;
+import javafx.util.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -87,6 +89,7 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
     // Call handlers
     private VoiceCallHandler voiceCallHandler;
     private VideoStreamHandler videoStreamHandler;
+    private TcpVideoClient tcpVideoClient;
     private ImageView remoteVideoView;
     private ImageView localVideoView;
 
@@ -545,25 +548,38 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
     private Stage callStage;
     private volatile long callStartTime;
 
+    // Device preferences (null = system default)
+    private VoiceCallHandler.AudioDevice prefMic = null;
+    private VoiceCallHandler.AudioDevice prefSpeaker = null;
+    private int prefCameraIndex = 0;
+    // Relay info stored to allow device restart mid-call
+    private String callRelayHost = "127.0.0.1";
+    private int callVoicePort = 9001;
+
     @Override
     public void onVoiceCall(long targetId) {
-        String targetName = "";
-        if (chatTab != null) {
-            ChatTab.ConvItem c = chatTab.getActive();
-            if (c != null)
-                targetName = c.name;
-        }
-        showActiveCallWindow(targetId, targetName, false);
+        String targetName = chatTab != null && chatTab.getActive() != null ? chatTab.getActive().name : "";
+        this.callTargetId = targetId;
+        this.callTargetName = targetName;
+        this.isVideoCall = false;
+        this.inCall = true;
+        JsonObject data = new JsonObject();
+        data.addProperty("targetId", targetId);
+        client.send(Protocol.TYPE_VOICE_CALL_START, data);
+        showOutgoingCallWindow(false);
     }
 
     @Override
     public void onVideoCall(long targetId) {
-        String targetName = "";
-        if (chatTab != null) {
-            ChatTab.ConvItem c = chatTab.getActive();
-            if (c != null) targetName = c.name;
-        }
-        showActiveCallWindow(targetId, targetName, true);
+        String targetName = chatTab != null && chatTab.getActive() != null ? chatTab.getActive().name : "";
+        this.callTargetId = targetId;
+        this.callTargetName = targetName;
+        this.isVideoCall = true;
+        this.inCall = true;
+        JsonObject data = new JsonObject();
+        data.addProperty("targetId", targetId);
+        client.send(Protocol.TYPE_VIDEO_CALL_START, data);
+        showOutgoingCallWindow(true);
     }
 
     @Override
@@ -745,7 +761,9 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
         long userId = data.has("userId") ? data.get("userId").getAsLong() : -1;
         String presence = data.has("presence") ? data.get("presence").getAsString() : "OFFLINE";
         if (userId > 0) {
-            chatTab.updatePresence(userId, "ONLINE".equals(presence));
+            boolean online = "ONLINE".equals(presence);
+            chatTab.updatePresence(userId, online);
+            contactsTab.updatePresence(userId, online); // đồng bộ tab Danh bạ
         }
     }
 
@@ -756,29 +774,38 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
         Platform.runLater(() -> {
             closeCallStage();
             callStage = new Stage();
-            callStage.setTitle(isVideo ? "MojiMoji - Gọi video" : "MojiMoji - Gọi thoại");
             callStage.initOwner(client.getPrimaryStage());
+            callStage.setTitle(isVideo ? "Gọi video — " + callTargetName : "Gọi thoại — " + callTargetName);
 
-            VBox root = new VBox(20);
-            root.setPadding(new Insets(30));
+            VBox root = new VBox(18);
+            root.setPadding(new Insets(44, 36, 32, 36));
             root.setAlignment(Pos.CENTER);
-            root.setStyle("-fx-background-color: #1C1E26;");
+            root.setStyle("-fx-background-color: linear-gradient(to bottom, #1A1D2E, #252840);");
 
-            Label icon = new Label(isVideo ? "\uD83D\uDCF9" : "\uD83D\uDCDE");
-            icon.setFont(Font.font(48));
-            Label name = new Label(callTargetName);
-            name.setFont(Font.font("SansSerif", FontWeight.BOLD, 20));
-            name.setTextFill(Color.WHITE);
-            Label status = new Label("\u0110ang g\u1ECDi...");
-            status.setFont(Font.font("SansSerif", 14));
-            status.setTextFill(Color.rgb(140, 146, 172));
+            String initials = callTargetName.length() >= 2
+                ? callTargetName.substring(0, 2).toUpperCase()
+                : callTargetName.isEmpty() ? "?" : callTargetName.substring(0, 1).toUpperCase();
+            Label avatarLbl = new Label(initials);
+            avatarLbl.setPrefSize(96, 96);
+            avatarLbl.setAlignment(Pos.CENTER);
+            avatarLbl.setStyle("-fx-background-color: #0068FF; -fx-text-fill: white; " +
+                    "-fx-font-size: 34px; -fx-font-weight: bold; -fx-background-radius: 48;");
 
-            Button endBtn = new Button("\u274C K\u1EBFt th\u00FAc");
-            endBtn.setStyle("-fx-background-color: #E5484D; -fx-text-fill: white; -fx-background-radius: 25; -fx-padding: 12 30; -fx-font-size: 14px; -fx-font-weight: bold; -fx-cursor: hand;");
+            Label nameLbl = new Label(callTargetName);
+            nameLbl.setFont(Font.font("SansSerif", FontWeight.BOLD, 22));
+            nameLbl.setTextFill(Color.WHITE);
+
+            Label statusLbl = new Label(isVideo ? "📹  Đang gọi video..." : "📞  Đang gọi...");
+            statusLbl.setFont(Font.font("SansSerif", 14));
+            statusLbl.setTextFill(Color.rgb(140, 146, 172));
+
+            Button endBtn = new Button("❌ Kết thúc");
+            endBtn.setStyle("-fx-background-color: #E5484D; -fx-text-fill: white; " +
+                    "-fx-background-radius: 25; -fx-padding: 12 32; -fx-font-size: 14px; -fx-font-weight: bold; -fx-cursor: hand;");
             endBtn.setOnAction(e -> endCall());
 
-            root.getChildren().addAll(icon, name, status, endBtn);
-            callStage.setScene(new Scene(root, 320, 400));
+            root.getChildren().addAll(avatarLbl, nameLbl, statusLbl, endBtn);
+            callStage.setScene(new Scene(root, 320, 380));
             callStage.setOnCloseRequest(e -> endCall());
             callStage.show();
         });
@@ -789,24 +816,33 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
         Platform.runLater(() -> {
             closeCallStage();
             callStage = new Stage();
+            callStage.initOwner(client.getPrimaryStage());
             callStage.setTitle(isVideo ? "Cu\u1ED9c g\u1ECDi video \u0111\u1EBFn" : "Cu\u1ED9c g\u1ECDi tho\u1EA1i \u0111\u1EBFn");
 
-            VBox root = new VBox(20);
-            root.setPadding(new Insets(30));
+            VBox root = new VBox(18);
+            root.setPadding(new Insets(36, 30, 30, 30));
             root.setAlignment(Pos.CENTER);
-            root.setStyle("-fx-background-color: #1C1E26;");
+            root.setStyle("-fx-background-color: linear-gradient(to bottom, #1A1D2E, #252840);");
 
-            Label icon = new Label(isVideo ? "\uD83D\uDCF9" : "\uD83D\uDCDE");
-            icon.setFont(Font.font(48));
-            Label title = new Label(isVideo ? "Cu\u1ED9c g\u1ECDi video" : "Cu\u1ED9c g\u1ECDi tho\u1EA1i");
-            title.setFont(Font.font("SansSerif", FontWeight.BOLD, 16));
-            title.setTextFill(Color.WHITE);
+            // Avatar circle v\u1EDBi ch\u1EEF c\u00E1i \u0111\u1EA7u
+            String initials = fromName.length() >= 2 ? fromName.substring(0, 2).toUpperCase() : fromName.substring(0, 1).toUpperCase();
+            Label avatarLbl = new Label(initials);
+            avatarLbl.setPrefSize(88, 88);
+            avatarLbl.setAlignment(Pos.CENTER);
+            avatarLbl.setStyle("-fx-background-color: #A156FF; -fx-text-fill: white; " +
+                    "-fx-font-size: 30px; -fx-font-weight: bold; -fx-background-radius: 44;");
+
+            Label callTypeLbl = new Label(isVideo ? "\uD83D\uDCF9  Cu\u1ED9c g\u1ECDi video" : "\uD83D\uDCDE  Cu\u1ED9c g\u1ECDi tho\u1EA1i");
+            callTypeLbl.setFont(Font.font("SansSerif", 14));
+            callTypeLbl.setTextFill(Color.rgb(160, 165, 200));
+
             Label name = new Label(fromName);
             name.setFont(Font.font("SansSerif", FontWeight.BOLD, 22));
             name.setTextFill(Color.WHITE);
 
-            HBox btnBox = new HBox(30);
+            HBox btnBox = new HBox(24);
             btnBox.setAlignment(Pos.CENTER);
+            btnBox.setPadding(new Insets(8, 0, 0, 0));
 
             Button acceptBtn = new Button("\u2705 Ch\u1EA5p nh\u1EADn");
             acceptBtn.setStyle("-fx-background-color: #31D158; -fx-text-fill: white; -fx-background-radius: 25; -fx-padding: 12 24; -fx-font-size: 14px; -fx-font-weight: bold; -fx-cursor: hand;");
@@ -828,8 +864,9 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
             });
 
             btnBox.getChildren().addAll(rejectBtn, acceptBtn);
-            root.getChildren().addAll(icon, title, name, btnBox);
-            callStage.setScene(new Scene(root, 320, 400));
+            root.getChildren().addAll(avatarLbl, callTypeLbl, name, btnBox);
+            callStage.setScene(new Scene(root, 380, 400));
+            callStage.setAlwaysOnTop(true);
             callStage.setOnCloseRequest(e -> {
                 JsonObject data = new JsonObject();
                 data.addProperty("targetId", fromUserId);
@@ -844,104 +881,195 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
         this.callTargetId = targetId;
         this.callTargetName = targetName;
         this.isVideoCall = isVideo;
+        this.inCall = true;
         Platform.runLater(() -> {
             closeCallStage();
+            callStartTime = System.currentTimeMillis();
+            callStage = new Stage();
+            callStage.initOwner(client.getPrimaryStage());
+            callStage.setTitle(isVideo ? "📹 " + callTargetName : "📞 " + callTargetName);
 
-            // Khởi tạo video stream handler nếu là video call
-            if (isVideo) {
+            if (!isVideo) {
+                // ===== VOICE CALL =====
+                VBox root = new VBox(18);
+                root.setPadding(new Insets(44, 36, 32, 36));
+                root.setAlignment(Pos.CENTER);
+                root.setStyle("-fx-background-color: linear-gradient(to bottom, #1A1D2E, #252840);");
+
+                String initials = callTargetName.length() >= 2
+                    ? callTargetName.substring(0, 2).toUpperCase()
+                    : callTargetName.isEmpty() ? "?" : callTargetName.substring(0, 1).toUpperCase();
+                Label avatarLbl = new Label(initials);
+                avatarLbl.setPrefSize(100, 100);
+                avatarLbl.setAlignment(Pos.CENTER);
+                avatarLbl.setStyle("-fx-background-color: #A156FF; -fx-text-fill: white; " +
+                        "-fx-font-size: 36px; -fx-font-weight: bold; -fx-background-radius: 50;");
+
+                Label nameLbl = new Label(callTargetName);
+                nameLbl.setFont(Font.font("SansSerif", FontWeight.BOLD, 22));
+                nameLbl.setTextFill(Color.WHITE);
+
+                Label timerLbl = new Label("00:00");
+                timerLbl.setFont(Font.font("SansSerif", 14));
+                timerLbl.setTextFill(Color.rgb(140, 146, 172));
+
+                Thread timerThread = new Thread(() -> {
+                    while (inCall && callStage != null && callStage.isShowing()) {
+                        try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
+                        long sec = (System.currentTimeMillis() - callStartTime) / 1000;
+                        Platform.runLater(() -> timerLbl.setText(String.format("%02d:%02d", sec / 60, sec % 60)));
+                    }
+                }, "call-timer");
+                timerThread.setDaemon(true);
+                timerThread.start();
+
+                String circleBase = "-fx-text-fill: white; -fx-background-radius: 50%; -fx-min-width: 54; -fx-min-height: 54; -fx-max-width: 54; -fx-max-height: 54; -fx-font-size: 20px; -fx-cursor: hand;";
+                final boolean[] muted = {false};
+
+                Button muteBtn = new Button("🎤");
+                muteBtn.setStyle("-fx-background-color: #3A3D52; " + circleBase);
+                muteBtn.setOnAction(e -> {
+                    muted[0] = !muted[0];
+                    muteBtn.setText(muted[0] ? "🔇" : "🎤");
+                    muteBtn.setStyle((muted[0] ? "-fx-background-color: #6B5BFF; " : "-fx-background-color: #3A3D52; ") + circleBase);
+                    if (voiceCallHandler != null) voiceCallHandler.setMuted(muted[0]);
+                });
+
+                Button endBtn = new Button("📞");
+                endBtn.setStyle("-fx-background-color: #E5484D; -fx-text-fill: white; -fx-background-radius: 50%; " +
+                        "-fx-min-width: 66; -fx-min-height: 66; -fx-max-width: 66; -fx-max-height: 66; " +
+                        "-fx-font-size: 26px; -fx-cursor: hand; -fx-rotate: 135;");
+                endBtn.setOnAction(e -> endCall());
+
+                Button speakerBtn = new Button("🔊");
+                speakerBtn.setStyle("-fx-background-color: #3A3D52; " + circleBase);
+
+                HBox ctrlBox = new HBox(28);
+                ctrlBox.setAlignment(Pos.CENTER);
+                ctrlBox.setPadding(new Insets(8, 0, 0, 0));
+                Button settingsBtnV = new Button("⚙");
+                settingsBtnV.setStyle("-fx-background-color: #3A3D52; " + circleBase);
+                settingsBtnV.setOnAction(e -> showCallSettings(false));
+                ctrlBox.getChildren().addAll(muteBtn, endBtn, speakerBtn, settingsBtnV);
+                root.getChildren().addAll(avatarLbl, nameLbl, timerLbl, ctrlBox);
+                callStage.setScene(new Scene(root, 360, 400));
+            } else {
+                // ===== VIDEO CALL =====
                 remoteVideoView = new ImageView();
-                remoteVideoView.setFitWidth(400);
-                remoteVideoView.setFitHeight(300);
                 remoteVideoView.setPreserveRatio(true);
                 localVideoView = new ImageView();
-                localVideoView.setFitWidth(120);
-                localVideoView.setFitHeight(90);
+                localVideoView.setFitWidth(160);
+                localVideoView.setFitHeight(120);
                 localVideoView.setPreserveRatio(true);
 
                 videoStreamHandler = new VideoStreamHandler();
                 videoStreamHandler.setClient(client);
                 videoStreamHandler.setViews(remoteVideoView, localVideoView);
-                videoStreamHandler.setStateListener(state -> {
-                    Platform.runLater(() -> {
-                        if ("ended".equals(state)) {
-                            inCall = false;
-                            closeCallStage();
-                        }
-                    });
-                });
-                videoStreamHandler.setErrorListener(msg -> {
-                    Platform.runLater(() -> showAlert("Video Call Error", msg));
-                });
+                videoStreamHandler.setStateListener(state -> Platform.runLater(() -> {
+                    if ("ended".equals(state)) { inCall = false; closeCallStage(); }
+                }));
+                videoStreamHandler.setErrorListener(msg -> Platform.runLater(() -> showAlert("Video Call Error", msg)));
                 videoStreamHandler.start(callTargetId, false);
-            }
 
-            callStage = new Stage();
-            callStage.setTitle("MojiMoji - Đang gọi");
-            callStartTime = System.currentTimeMillis();
+                StackPane root = new StackPane();
+                root.setStyle("-fx-background-color: #000000;");
 
-            VBox root = new VBox(20);
-            root.setPadding(new Insets(30));
-            root.setAlignment(Pos.CENTER);
-            root.setStyle("-fx-background-color: #1C1E26;");
+                remoteVideoView.fitWidthProperty().bind(root.widthProperty());
+                remoteVideoView.fitHeightProperty().bind(root.heightProperty());
 
-            if (isVideo) {
-                VBox videoBox = new VBox(10);
-                videoBox.setAlignment(Pos.CENTER);
-                StackPane remotePane = new StackPane(remoteVideoView);
-                remotePane.setStyle("-fx-background-color: black; -fx-background-radius: 8;");
+                Label noVideoLbl = new Label("📹\n" + callTargetName + "\n\nĐang kết nối...");
+                noVideoLbl.setStyle("-fx-text-fill: rgba(200,200,200,0.85); -fx-font-size: 18px; -fx-text-alignment: center;");
+                noVideoLbl.setAlignment(Pos.CENTER);
+                remoteVideoView.imageProperty().addListener((obs, o, n) -> noVideoLbl.setVisible(n == null));
+
                 StackPane localPane = new StackPane(localVideoView);
-                localPane.setStyle("-fx-background-color: black; -fx-background-radius: 8;");
-                localPane.setMaxSize(120, 90);
+                localPane.setPrefSize(160, 120);
+                localPane.setStyle("-fx-background-color: #1A1A2E; -fx-background-radius: 10; " +
+                        "-fx-border-color: rgba(255,255,255,0.25); -fx-border-radius: 10; -fx-border-width: 1;");
                 StackPane.setAlignment(localPane, Pos.BOTTOM_RIGHT);
-                StackPane videoStack = new StackPane(remotePane, localPane);
-                videoBox.getChildren().add(videoStack);
-                root.getChildren().add(videoBox);
+                StackPane.setMargin(localPane, new Insets(0, 16, 88, 0));
+
+                // Gradient fade regions (nền trong suốt cho topBar/controlsBar)
+                Region topFade = new Region();
+                topFade.setStyle("-fx-background-color: linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, transparent 100%);");
+                topFade.setPrefHeight(80);
+                topFade.setMaxWidth(Double.MAX_VALUE);
+                StackPane.setAlignment(topFade, Pos.TOP_CENTER);
+
+                Region bottomFade = new Region();
+                bottomFade.setStyle("-fx-background-color: linear-gradient(to top, rgba(0,0,0,0.55) 0%, transparent 100%);");
+                bottomFade.setPrefHeight(130);
+                bottomFade.setMaxWidth(Double.MAX_VALUE);
+                StackPane.setAlignment(bottomFade, Pos.BOTTOM_CENTER);
+
+                HBox topBar = new HBox(4);
+                topBar.setPadding(new Insets(14, 18, 14, 18));
+                topBar.setAlignment(Pos.CENTER_LEFT);
+                topBar.setStyle("-fx-background-color: transparent;");
+                topBar.setMaxWidth(Double.MAX_VALUE);
+                StackPane.setAlignment(topBar, Pos.TOP_CENTER);
+                Label topNameLbl = new Label("📹  " + callTargetName);
+                topNameLbl.setFont(Font.font("SansSerif", FontWeight.BOLD, 15));
+                topNameLbl.setTextFill(Color.WHITE);
+                Label topTimerLbl = new Label("  ·  00:00");
+                topTimerLbl.setFont(Font.font("SansSerif", 14));
+                topTimerLbl.setTextFill(Color.rgb(180, 185, 210));
+                Thread timerThread = new Thread(() -> {
+                    while (inCall && callStage != null && callStage.isShowing()) {
+                        try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
+                        long sec = (System.currentTimeMillis() - callStartTime) / 1000;
+                        Platform.runLater(() -> topTimerLbl.setText("  ·  " + String.format("%02d:%02d", sec / 60, sec % 60)));
+                    }
+                }, "call-timer");
+                timerThread.setDaemon(true);
+                timerThread.start();
+                topBar.getChildren().addAll(topNameLbl, topTimerLbl);
+
+                HBox controlsBar = new HBox(24);
+                controlsBar.setAlignment(Pos.CENTER);
+                controlsBar.setPadding(new Insets(14, 24, 20, 24));
+                controlsBar.setStyle("-fx-background-color: transparent;");
+                controlsBar.setMaxWidth(360);
+                StackPane.setAlignment(controlsBar, Pos.BOTTOM_CENTER);
+
+                String circleV = "-fx-text-fill: white; -fx-background-radius: 50%; -fx-min-width: 52; -fx-min-height: 52; -fx-max-width: 52; -fx-max-height: 52; -fx-font-size: 20px; -fx-cursor: hand;";
+                final boolean[] mutedV = {false};
+                Button muteBtnV = new Button("🎤");
+                muteBtnV.setStyle("-fx-background-color: rgba(255,255,255,0.18); " + circleV);
+                muteBtnV.setOnAction(e -> {
+                    mutedV[0] = !mutedV[0];
+                    muteBtnV.setText(mutedV[0] ? "🔇" : "🎤");
+                    if (voiceCallHandler != null) voiceCallHandler.setMuted(mutedV[0]);
+                });
+
+                Button camBtn = new Button("📷");
+                camBtn.setStyle("-fx-background-color: rgba(255,255,255,0.18); " + circleV);
+
+                Button endBtnV = new Button("📞");
+                endBtnV.setStyle("-fx-background-color: #E5484D; -fx-text-fill: white; -fx-background-radius: 50%; " +
+                        "-fx-min-width: 62; -fx-min-height: 62; -fx-max-width: 62; -fx-max-height: 62; " +
+                        "-fx-font-size: 24px; -fx-cursor: hand; -fx-rotate: 135;");
+                endBtnV.setOnAction(e -> endCall());
+                Button settingsBtnVid = new Button("⚙");
+                settingsBtnVid.setStyle("-fx-background-color: rgba(255,255,255,0.18); " + circleV);
+                settingsBtnVid.setOnAction(e -> showCallSettings(true));
+                controlsBar.getChildren().addAll(muteBtnV, endBtnV, camBtn, settingsBtnVid);
+
+                // Auto-hide controls sau 3 giây
+                PauseTransition hideTimer = new PauseTransition(Duration.seconds(3));
+                hideTimer.setOnFinished(e -> { controlsBar.setVisible(false); topBar.setVisible(false); });
+                root.setOnMouseMoved(e -> {
+                    controlsBar.setVisible(true);
+                    topBar.setVisible(true);
+                    hideTimer.playFromStart();
+                });
+                hideTimer.play();
+
+                root.getChildren().addAll(remoteVideoView, noVideoLbl, topFade, bottomFade, topBar, localPane, controlsBar);
+                callStage.setMaximized(true);
+                callStage.setScene(new Scene(root, 900, 650));
             }
 
-            Label icon = new Label(isVideoCall ? "\uD83D\uDCF9" : "\uD83D\uDCDE");
-            icon.setFont(Font.font(48));
-            Label name = new Label(callTargetName);
-            name.setFont(Font.font("SansSerif", FontWeight.BOLD, 20));
-            name.setTextFill(Color.WHITE);
-
-            Label timerLbl = new Label("00:00");
-            timerLbl.setFont(Font.font("SansSerif", 14));
-            timerLbl.setTextFill(Color.rgb(140, 146, 172));
-
-            // Timer thread
-            Thread timerThread = new Thread(() -> {
-                while (inCall && callStage != null && callStage.isShowing()) {
-                    try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
-                    long elapsed = System.currentTimeMillis() - callStartTime;
-                    long sec = elapsed / 1000;
-                    Platform.runLater(() -> timerLbl.setText(
-                            String.format("%02d:%02d", sec / 60, sec % 60)));
-                }
-            }, "call-timer");
-            timerThread.setDaemon(true);
-            timerThread.start();
-
-            HBox ctrlBox = new HBox(20);
-            ctrlBox.setAlignment(Pos.CENTER);
-
-            Button muteBtn = new Button("\uD83D\uDD07");
-            muteBtn.setStyle("-fx-background-color: #3A3D52; -fx-text-fill: white; -fx-background-radius: 50%; -fx-min-width: 50; -fx-min-height: 50; -fx-font-size: 20px; -fx-cursor: hand;");
-            muteBtn.setOnAction(e -> {
-                boolean muted = !muteBtn.getText().contains("\uD83D\uDD0A");
-                muteBtn.setText(muted ? "\uD83D\uDD07" : "\uD83D\uDD0A");
-                if (voiceCallHandler != null) voiceCallHandler.setMuted(muted);
-            });
-
-            Button endBtn = new Button("\uD83D\uDCDE");
-            endBtn.setStyle("-fx-background-color: #E5484D; -fx-text-fill: white; -fx-background-radius: 50%; -fx-min-width: 56; -fx-min-height: 56; -fx-font-size: 24px; -fx-cursor: hand;");
-            endBtn.setOnAction(e -> endCall());
-
-            Button speakerBtn = new Button("\uD83D\uDD0A");
-            speakerBtn.setStyle("-fx-background-color: #3A3D52; -fx-text-fill: white; -fx-background-radius: 50%; -fx-min-width: 50; -fx-min-height: 50; -fx-font-size: 20px; -fx-cursor: hand;");
-
-            ctrlBox.getChildren().addAll(muteBtn, endBtn, speakerBtn);
-            root.getChildren().addAll(icon, name, timerLbl, ctrlBox);
-            callStage.setScene(new Scene(root, isVideo ? 500 : 320, isVideo ? 600 : 420));
             callStage.setOnCloseRequest(e -> endCall());
             callStage.show();
         });
@@ -960,6 +1088,7 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
         inCall = false;
         if (voiceCallHandler != null && voiceCallHandler.isRunning()) voiceCallHandler.endCall();
         if (videoStreamHandler != null && videoStreamHandler.isRunning()) videoStreamHandler.end();
+        if (tcpVideoClient != null) { tcpVideoClient.close(); tcpVideoClient = null; }
         JsonObject data = new JsonObject();
         data.addProperty("targetId", callTargetId);
         if (callSessionId != null) data.addProperty("sessionId", callSessionId);
@@ -985,66 +1114,212 @@ public class MainView implements ChatTab.Callback, ContactsTab.Callback {
         showActiveCallWindow(callTargetId, callTargetName, isVideoCall);
     }
 
-    /** Cu\u1ED9c g\u1ECDi b\u1ECB t\u1EEB ch\u1ED1i */
+    /** Cuộc gọi bị từ chối */
     private void handleCallRejected(JsonObject message) {
+        inCall = false;
         Platform.runLater(() -> {
-            showAlert("Cu\u1ED9c g\u1ECDi", callTargetName + " \u0111\u00E3 t\u1EEB ch\u1ED1i cu\u1ED9c g\u1ECDi.");
             closeCallStage();
-            inCall = false;
+            if (chatTab != null) chatTab.addCallHistoryBubble(isVideoCall, true, 0);
         });
     }
 
-    /** Cu\u1ED9c g\u1ECDi k\u1EBFt th\u00FAc t\u1EEB ph\u00EDa kia */
+    /** Cuộc gọi kết thúc từ phía kia */
     private void handleCallEnded(JsonObject message) {
+        long durationSec = inCall ? (System.currentTimeMillis() - callStartTime) / 1000 : 0;
+        inCall = false;
         Platform.runLater(() -> {
-            String name = message.has("senderName") ? message.get("senderName").getAsString() : "\u1EA8n danh";
-            showAlert("K\u1EBFt th\u00FAc", name + " \u0111\u00E3 k\u1EBFt th\u00FAc cu\u1ED9c g\u1ECDi.");
             closeCallStage();
-            inCall = false;
+            if (chatTab != null && durationSec > 1) {
+                chatTab.addCallHistoryBubble(isVideoCall, false, durationSec);
+            }
         });
     }
 
-    /** Nh\u1EADn th\u00F4ng tin relay t\u1EEB server -> k\u1EBFt n\u1ED1i UDP */
     private void handleRelayInfo(JsonObject message) {
         String sessionId = message.has("sessionId") ? message.get("sessionId").getAsString() : "";
-        int voicePort = message.has("voicePort") ? message.get("voicePort").getAsInt() : 9001;
-        int videoPort = message.has("videoPort") ? message.get("videoPort").getAsInt() : 9002;
-        boolean isVideo = message.has("isVideo") && message.get("isVideo").getAsBoolean();
+        int voicePort    = message.has("voicePort")    ? message.get("voicePort").getAsInt()    : Protocol.VOICE_PORT;
+        int mediaTcpPort = message.has("mediaTcpPort") ? message.get("mediaTcpPort").getAsInt() : Protocol.MEDIA_TCP_PORT;
         boolean isCaller = message.has("caller") && message.get("caller").getAsBoolean();
+
         callSessionId = sessionId;
+        callRelayHost = "127.0.0.1";
+        callVoicePort = voicePort;
 
-        String relayHost = "127.0.0.1"; // server c\u0169ng l\u00E0 relay trong local dev
-        int relayPort = isVideo ? videoPort : voicePort;
+        // Bên gọi (caller) chưa có active call window — server không forward CALL_ACCEPT
+        // Khi nhận RELAY_INFO với caller=true → chuyển từ outgoing → active call window
+        if (isCaller) {
+            showActiveCallWindow(callTargetId, callTargetName, isVideoCall);
+        }
 
-        // Kết nối call handler tới relay
+        // Kết nối TCP video relay trên background thread (chỉ khi là video call)
+        if (isVideoCall) {
+            String host   = callRelayHost;
+            int   tcpPort = mediaTcpPort;
+            String sid    = sessionId;
+            Thread tcpConnThread = new Thread(() -> {
+                try {
+                    TcpVideoClient tcp = new TcpVideoClient();
+                    tcp.connect(host, tcpPort, sid);
+                    tcpVideoClient = tcp;
+                    // Dùng Platform.runLater để đảm bảo videoStreamHandler đã được tạo
+                    // bởi showActiveCallWindow trước khi bind tcpClient
+                    Platform.runLater(() -> {
+                        if (videoStreamHandler != null) {
+                            videoStreamHandler.setTcpClient(tcp);
+                            tcp.setFrameListener(bytes -> {
+                                VideoStreamHandler vsh = videoStreamHandler;
+                                if (vsh != null) vsh.onFrameBytes(bytes);
+                            });
+                        }
+                    });
+                } catch (Exception e) {
+                    System.err.println("TcpVideoClient connect failed: " + e.getMessage());
+                }
+            }, "tcp-video-connect");
+            tcpConnThread.setDaemon(true);
+            tcpConnThread.start();
+        }
+
+        // Kết nối voice (UDP) trên JavaFX thread
         Platform.runLater(() -> {
-            // Voice call relay
-            voiceCallHandler = new VoiceCallHandler();
+            voiceCallHandler = new VoiceCallHandler(prefMic, prefSpeaker);
             voiceCallHandler.prepareForCall();
-            voiceCallHandler.startCall(sessionId, relayHost, relayPort);
+            voiceCallHandler.startCall(sessionId, callRelayHost, voicePort);
         });
     }
 
     private void showVideoSettings() {
-        if (videoStreamHandler == null)
-            return;
-        List<String> cams = VideoStreamHandler.listCameras();
-        if (cams.isEmpty()) {
-            showAlert("Camera", "Khong tim thay camera.");
-            return;
+        showCallSettings(true);
+    }
+
+    private void showCallSettings(boolean isVideo) {
+        Stage settings = new Stage();
+        if (callStage != null) {
+            settings.initOwner(callStage);
+            settings.initModality(Modality.WINDOW_MODAL);
+        }
+        settings.setAlwaysOnTop(true);
+        settings.setTitle("Cài đặt cuộc gọi");
+
+        VBox root = new VBox(10);
+        root.setPadding(new Insets(24, 28, 24, 28));
+        root.setStyle("-fx-background-color: #1E2235;");
+        root.setPrefWidth(400);
+
+        Label titleLbl = new Label("⚙  Cài đặt thiết bị");
+        titleLbl.setFont(Font.font("SansSerif", FontWeight.BOLD, 16));
+        titleLbl.setTextFill(Color.WHITE);
+
+        String labelStyle = "-fx-text-fill: rgba(180,185,210,0.9); -fx-font-size: 12px; -fx-padding: 8 0 2 0;";
+        String comboStyle = "-fx-background-color: #2A2F45; -fx-text-fill: white; -fx-pref-width: 350; -fx-font-size: 13px;";
+
+        // Microphone
+        Label micLbl = new Label("🎙  Microphone");
+        micLbl.setStyle(labelStyle);
+        List<VoiceCallHandler.AudioDevice> mics = VoiceCallHandler.listMicrophones();
+        ComboBox<VoiceCallHandler.AudioDevice> micBox = new ComboBox<>();
+        micBox.getItems().add(null);
+        micBox.getItems().addAll(mics);
+        micBox.setPromptText("Mặc định hệ thống");
+        micBox.setPrefWidth(350);
+        micBox.setStyle(comboStyle);
+        if (prefMic != null) micBox.setValue(prefMic);
+
+        // Speaker
+        Label spkLbl = new Label("🔊  Loa / Speaker");
+        spkLbl.setStyle(labelStyle);
+        List<VoiceCallHandler.AudioDevice> speakers = VoiceCallHandler.listSpeakers();
+        ComboBox<VoiceCallHandler.AudioDevice> spkBox = new ComboBox<>();
+        spkBox.getItems().add(null);
+        spkBox.getItems().addAll(speakers);
+        spkBox.setPromptText("Mặc định hệ thống");
+        spkBox.setPrefWidth(350);
+        spkBox.setStyle(comboStyle);
+        if (prefSpeaker != null) spkBox.setValue(prefSpeaker);
+
+        root.getChildren().addAll(titleLbl, micLbl, micBox, spkLbl, spkBox);
+
+        // Camera — loaded async to avoid blocking JavaFX thread
+        ComboBox<String> camBox = new ComboBox<>();
+        if (isVideo) {
+            Label camLbl = new Label("📷  Camera");
+            camLbl.setStyle(labelStyle);
+            camBox.setPromptText("Đang tải...");
+            camBox.setDisable(true);
+            camBox.setPrefWidth(350);
+            camBox.setStyle(comboStyle);
+            root.getChildren().addAll(camLbl, camBox);
+            Thread loadCams = new Thread(() -> {
+                List<String> cams = VideoStreamHandler.listCameras();
+                Platform.runLater(() -> {
+                    camBox.setDisable(false);
+                    camBox.getItems().addAll(cams.isEmpty()
+                            ? List.of("Không tìm thấy camera") : cams);
+                    if (!cams.isEmpty())
+                        camBox.setValue(cams.get(Math.min(prefCameraIndex, cams.size() - 1)));
+                });
+            }, "cam-list-load");
+            loadCams.setDaemon(true);
+            loadCams.start();
         }
 
-        ChoiceDialog<String> dialog = new ChoiceDialog<>(cams.get(0), cams);
-        dialog.setTitle("Cai dat camera");
-        dialog.setHeaderText("Chon camera");
-        dialog.setContentText("Camera:");
-        dialog.showAndWait().ifPresent(selected -> {
-            int idx = cams.indexOf(selected);
-            if (idx >= 0) {
-                videoStreamHandler.selectCamera(idx);
-                showAlert("Camera", "Da chon: " + selected + "\nVui long bat lai cuoc goi de ap dung.");
+        Label hintLbl = new Label("Nhấn Áp dụng để kết nối lại thiết bị ngay lập tức.");
+        hintLbl.setStyle("-fx-text-fill: rgba(140,146,172,0.8); -fx-font-size: 11px; -fx-wrap-text: true;");
+        hintLbl.setPadding(new Insets(8, 0, 4, 0));
+        root.getChildren().add(hintLbl);
+
+        final ComboBox<String> finalCamBox = camBox;
+        Button applyBtn = new Button("✓  Áp dụng");
+        applyBtn.setStyle("-fx-background-color: #0068FF; -fx-text-fill: white; " +
+                "-fx-background-radius: 8; -fx-padding: 8 24; -fx-font-size: 13px; -fx-font-weight: bold; -fx-cursor: hand;");
+        applyBtn.setOnAction(e -> {
+            prefMic = micBox.getValue();
+            prefSpeaker = spkBox.getValue();
+            if (isVideo && !finalCamBox.isDisable() && finalCamBox.getValue() != null) {
+                int idx = finalCamBox.getItems().indexOf(finalCamBox.getValue());
+                prefCameraIndex = Math.max(0, idx);
             }
+            if (voiceCallHandler != null && voiceCallHandler.isRunning() && callSessionId != null) {
+                voiceCallHandler.endCall();
+                voiceCallHandler = new VoiceCallHandler(prefMic, prefSpeaker);
+                voiceCallHandler.prepareForCall();
+                voiceCallHandler.startCall(callSessionId, callRelayHost, callVoicePort);
+            }
+            if (isVideo && videoStreamHandler != null && videoStreamHandler.isRunning()) {
+                // Dùng stopCapture() thay vì end() để tránh gửi TYPE_VIDEO_CALL_END
+                // end() sẽ báo server kết thúc cuộc gọi → bên kia bị ngắt máy
+                videoStreamHandler.stopCapture();
+                videoStreamHandler = new VideoStreamHandler();
+                videoStreamHandler.setClient(client);
+                videoStreamHandler.setViews(remoteVideoView, localVideoView);
+                videoStreamHandler.selectCamera(prefCameraIndex);
+                // Tái sử dụng TcpVideoClient hiện tại nếu vẫn còn kết nối
+                if (tcpVideoClient != null && tcpVideoClient.isConnected()) {
+                    videoStreamHandler.setTcpClient(tcpVideoClient);
+                    final VideoStreamHandler vsh = videoStreamHandler;
+                    tcpVideoClient.setFrameListener(bytes -> vsh.onFrameBytes(bytes));
+                }
+                videoStreamHandler.setStateListener(state -> Platform.runLater(() -> {
+                    if ("ended".equals(state)) { inCall = false; closeCallStage(); }
+                }));
+                videoStreamHandler.setErrorListener(msg -> Platform.runLater(() -> showAlert("Video Error", msg)));
+                videoStreamHandler.start(callTargetId, false);
+            }
+            settings.close();
         });
+
+        Button cancelBtn = new Button("Huỷ");
+        cancelBtn.setStyle("-fx-background-color: #2A2F45; -fx-text-fill: rgba(255,255,255,0.8); " +
+                "-fx-background-radius: 8; -fx-padding: 8 20; -fx-font-size: 13px; -fx-cursor: hand;");
+        cancelBtn.setOnAction(e -> settings.close());
+
+        HBox btnRow = new HBox(12, cancelBtn, applyBtn);
+        btnRow.setAlignment(Pos.CENTER_RIGHT);
+        btnRow.setPadding(new Insets(10, 0, 0, 0));
+        root.getChildren().add(btnRow);
+
+        settings.setScene(new Scene(root));
+        settings.showAndWait();
     }
 
     public void onDisconnected() {

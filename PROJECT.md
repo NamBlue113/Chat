@@ -5,403 +5,716 @@
 
 ---
 
-## Table of Contents
+## Mục Lục
 
-1. [Tech Stack](#tech-stack)
-2. [Architecture Overview](#architecture-overview)
-3. [Directory Structure](#directory-structure)
-4. [Server Components](#server-components)
-5. [Client Components](#client-components)
-6. [Shared Protocol & Models](#shared-protocol--models)
-7. [Database Schema](#database-schema)
-8. [Transport & Data Flow](#transport--data-flow)
-9. [Features](#features)
-10. [Known Issues](#known-issues)
-11. [Build & Run](#build--run)
-12. [Troubleshooting](#troubleshooting)
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Core | Java 17, JavaFX 17.0.6, Maven |
-| Server | WebSocket (java-websocket 1.5.3), TCP Socket, UDP relay |
-| Database | MySQL 8.x, HikariCP 5.0.1, jBCrypt 0.4 |
-| Client | JavaFX Controls/Graphics/Web, Gson 2.10.1 |
-| Call (Voice) | Java Sound API (PCM 16kHz), UDP relay |
-| Call (Video) | Sarxos webcam-capture 0.3.12, JPEG + UDP relay |
-| Logging | SLF4J 2.0.7 + Logback 1.4.7 |
-| Build | Maven assembly plugin (fat JAR) |
+1. [Tổng Quan Dự Án](#1-tổng-quan-dự-án)
+2. [Tech Stack & Phiên Bản](#2-tech-stack--phiên-bản)
+3. [Kiến Trúc Hệ Thống](#3-kiến-trúc-hệ-thống)
+4. [Cấu Trúc Thư Mục](#4-cấu-trúc-thư-mục)
+5. [Quy Tắc Coding](#5-quy-tắc-coding)
+6. [Giao Thức Truyền Tin (Protocol)](#6-giao-thức-truyền-tin-protocol)
+7. [Luồng Dữ Liệu (Data Flow)](#7-luồng-dữ-liệu-data-flow)
+8. [Database Schema](#8-database-schema)
+9. [Các Thành Phần Server](#9-các-thành-phần-server)
+10. [Các Thành Phần Client](#10-các-thành-phần-client)
+11. [Tính Năng Hiện Có](#11-tính-năng-hiện-có)
+12. [Hướng Dẫn Build & Chạy](#12-hướng-dẫn-build--chạy)
+13. [Cấu Hình](#13-cấu-hình)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
-## Architecture Overview
+## 1. Tổng Quan Dự Án
 
-```
-+-------------+     WebSocket/9080     +--------------+     SQL      +---------+
-|  Client A   | <---------------------> |  ChatServer  | <---------> |  MySQL  |
-| (JavaFX UI) |                        | (TCP + WS)   |             |   8.x   |
-+------+------+                        +------+-------+             +---------+
-       | UDP/9001 (voice)                     |
-       | UDP/9002 (video)                     |
-       +----------------> MediaRelayServer <--+
-                         (UDP relay / NAT hole-punch)
-```
+**Moji Messenger** là ứng dụng chat desktop đầy đủ tính năng, được xây dựng theo mô hình client-server. Mục tiêu là tái tạo các tính năng cốt lõi của Messenger/Zalo bao gồm:
 
-Three layers in the codebase:
+- Nhắn tin 1-1 và nhóm theo thời gian thực
+- Gọi voice và video qua UDP relay
+- Gửi file, hình ảnh, sticker
+- Quản lý bạn bè, nhóm chat
+- Giao diện Dark/Light theme
 
-```
-client.ui.* (Presentation)
-    + JSON
-client.net.* (Transport)
-    + WebSocket / TCP
-server.service.* (Business Logic)
-    + JDBC
-server.db.* (Data Access / MySQL)
-```
+**Đây là đồ án tốt nghiệp** — không sử dụng các framework web (Spring, etc.), toàn bộ server và client được viết thuần Java.
 
 ---
 
-## Directory Structure
+## 2. Tech Stack & Phiên Bản
+
+| Tầng | Công nghệ | Phiên bản |
+|------|-----------|-----------|
+| Ngôn ngữ | Java | 17 (LTS) |
+| UI | JavaFX Controls / Graphics / FXML / Media | 17.0.6 |
+| Build | Maven | 3.8+ |
+| WebSocket (server) | java-websocket (TooTallNate) | 1.5.3 |
+| Database | MySQL | 8.x |
+| Connection pool | HikariCP | 5.0.1 |
+| Password hash | jBCrypt | 0.4 |
+| JSON | Gson | 2.10.1 |
+| Webcam | Sarxos webcam-capture | 0.3.12 |
+| Logging | SLF4J API + Logback | 2.0.7 / 1.4.7 |
+| HTTP Client | java.net.http.HttpClient | Java 11+ built-in |
+| Testing | JUnit Jupiter | 5.9.3 |
+
+> **Lưu ý JavaFX**: Phải dùng `mvn javafx:run` để chạy client, **không dùng** `java -jar` vì JavaFX yêu cầu module path riêng.
+
+---
+
+## 3. Kiến Trúc Hệ Thống
+
+```
++-------------+   WebSocket ws://host:9080   +--------------+   JDBC   +-----------+
+|  Client A   | <--------------------------> |  WsChatServer| <------> | MySQL 8.x |
+| (JavaFX UI) |                             |   (port 9080)|          | gui_chat  |
++------+------+   TCP (legacy) port 9000    +------+-------+          +-----------+
+       |          <------------------------->      |
+       |                                    | ChatServer.java |
+       | UDP port 9001 (voice PCM)          | (khởi động cả  |
+       | UDP port 9002 (video JPEG)         |  3 service)    |
+       +---> MediaRelayServer <-------------+
+             (TURN-like UDP relay)
+```
+
+### Phân Tầng
+
+```
+[Client Side]                          [Server Side]
+─────────────────────────────          ──────────────────────────────
+client.ui.*        ← Presentation      server.service.*  ← Business Logic
+    ↕  JavaFX / JSON                       ↕  JDBC / HikariCP
+client.net.*       ← Transport         server.db.*       ← Data Access
+    ↕  WebSocket / TCP                     ↕  MySQL
+shared.Protocol    ← Giao thức chung   shared.model.*    ← Entity dùng 2 phía
+```
+
+### Hai Transport Song Song
+
+| Transport | Port | Class | Trạng thái |
+|-----------|------|-------|------------|
+| WebSocket (JSON) | 9080 | `WsChatServer.java` | **Mặc định** (ưu tiên) |
+| TCP (JSON) | 9000 | `ClientHandler.java` | Legacy, vẫn hoạt động |
+
+Client tự động kết nối WebSocket trước. Nếu thất bại mới fallback sang TCP.
+
+---
+
+## 4. Cấu Trúc Thư Mục
 
 ```
 src/main/java/com/messenger/
-+-- client/
-|   +-- call/
-|   |   +-- VoiceCallHandler.java       # PCM capture + UDP + noise gate, AGC, jitter buffer
-|   |   +-- VideoCallHandler.java       # Sarxos webcam + JPEG + UDP relay render
-|   |   +-- HelperProcessManager.java   # Legacy WebRTC helper (unused)
-|   +-- config/
-|   |   +-- AppConfig.java              # app.properties reader
-|   +-- net/
-|   |   +-- RealtimeClient.java         # WebSocket transport (ngrok / production)
-|   |   +-- ApiClient.java              # REST API client
-|   +-- ui/
-|   |   +-- LoginView.java              # Login screen
-|   |   +-- RegisterView.java           # Register screen
-|   |   +-- MainView.java               # 4-column layout: nav + sidebar + chat + info
-|   |   +-- NotificationManager.java    # Desktop notifications
-|   |   +-- IconManager.java            # Icon utilities
-|   |   +-- StickerManager.java         # Sticker encode/decode
-|   |   +-- ThemeManager.java           # CSS theme toggle
-|   |   +-- tabs/
-|   |       +-- ChatTab.java            # Tab chat: conversation list + message area
-|   |       +-- ContactsTab.java        # Tab contacts + friend requests
-|   |       +-- ProfileTab.java         # Tab user profile
-|   +-- ChatClient.java                 # JavaFX Application entry point
-|   +-- ChatHistoryManager.java         # Local message cache (JSON files)
-|   +-- ServerConnection.java           # Legacy TCP transport
-|
-+-- server/
-|   +-- db/
-|   |   +-- DatabaseManager.java        # HikariCP pool + schema init
-|   +-- service/
-|   |   +-- AuthService.java            # Register, Login, Friend mgmt, Search
-|   |   +-- ConversationService.java    # Conversation CRUD (private + group)
-|   |   +-- GroupService.java           # Group CRUD + group messages
-|   |   +-- MessageService.java         # Message persistence + history + delivery
-|   |   +-- FileService.java            # File upload (chunked) + download
-|   +-- ChatServer.java                 # Main server (TCP + WebSocket + MediaRelay)
-|   +-- ClientHandler.java              # TCP client handler (JSON protocol)
-|   +-- WsChatServer.java               # WebSocket server mirror (JSON protocol)
-|   +-- MediaRelayServer.java           # UDP relay (TURN-like) for voice/video
-|
-+-- shared/
-|   +-- model/
-|   |   +-- Message.java                # Message entity
-|   |   +-- User.java                   # User entity
-|   |   +-- Group.java                  # Group entity + GroupMember inner class
-|   |   +-- FriendRequest.java          # Friend request entity
-|   +-- util/
-|   |   +-- BCryptUtil.java             # Password hashing wrapper
-|   |   +-- FileTransferUtil.java       # Chunked file transfer helpers
-|   +-- Protocol.java                   # All message types, codes, constants
-|
-+-- test/
+├── client/
+│   ├── call/
+│   │   ├── VoiceCallHandler.java     # Gọi voice: PCM 16kHz, noise gate, AGC, jitter buffer, UDP
+│   │   ├── VideoCallHandler.java     # Gọi video: Sarxos webcam → JPEG → UDP relay
+│   │   └── VideoStreamHandler.java   # Render video frame từ remote
+│   ├── config/
+│   │   └── AppConfig.java            # Đọc app.properties, cung cấp URL server
+│   ├── net/
+│   │   ├── RealtimeClient.java       # WebSocket client (java.net.http), auto-reconnect
+│   │   └── ApiClient.java            # HTTP GET/POST helper dùng java.net.http.HttpClient
+│   ├── ui/
+│   │   ├── LoginView.java            # Màn hình đăng nhập
+│   │   ├── RegisterView.java         # Màn hình đăng ký
+│   │   ├── MainView.java             # Layout chính: NavRail 68px + Sidebar 320px + Content + InfoPanel 280px
+│   │   ├── NotificationManager.java  # Desktop notification
+│   │   ├── IconManager.java          # Load icon từ resources
+│   │   ├── StickerManager.java       # Mã hoá/giải mã sticker
+│   │   ├── ThemeManager.java         # Chuyển Dark/Light CSS
+│   │   └── tabs/
+│   │       ├── ChatTab.java          # Tab chat: danh sách hội thoại + vùng nhắn tin (~1888 dòng)
+│   │       ├── ContactsTab.java      # Tab danh bạ: friend requests + danh sách bạn bè
+│   │       └── ProfileTab.java       # Tab hồ sơ người dùng
+│   ├── ChatClient.java               # JavaFX Application — entry point client
+│   ├── ChatHistoryManager.java       # Cache tin nhắn local (JSON file trong chat_history/)
+│   └── ServerConnection.java         # TCP transport (legacy)
+│
+├── server/
+│   ├── db/
+│   │   └── DatabaseManager.java      # HikariCP pool, khởi tạo schema từ sql/schema.sql
+│   ├── service/
+│   │   ├── AuthService.java          # Đăng ký (BCrypt), đăng nhập, profile, bạn bè, presence
+│   │   ├── ConversationService.java  # CRUD hội thoại (private/group), danh sách với last message
+│   │   ├── GroupService.java         # Tạo nhóm, thêm/xóa/promote/demote thành viên, tin nhắn nhóm
+│   │   ├── MessageService.java       # Lưu/lấy tin nhắn, phân trang (beforeId), unsend, delivery
+│   │   └── FileService.java          # Upload chunked, reassembly, download, xóa file
+│   ├── ChatServer.java               # Main server: khởi động TCP 9000 + WS 9080 + UDP relay
+│   ├── ClientHandler.java            # TCP handler: parse JSON line, dispatch ~40 message types
+│   ├── WsChatServer.java             # WebSocket handler: mirror logic của ClientHandler
+│   └── MediaRelayServer.java         # UDP TURN-like relay: port 9001 (voice), 9002 (video)
+│
+└── shared/
+    ├── model/
+    │   ├── Message.java              # Entity tin nhắn
+    │   ├── User.java                 # Entity người dùng
+    │   ├── Group.java                # Entity nhóm + inner class GroupMember
+    │   └── FriendRequest.java        # Entity lời mời kết bạn
+    ├── util/
+    │   ├── BCryptUtil.java           # Wrapper hash/verify password
+    │   └── FileTransferUtil.java     # Helper chia/ghép chunk file
+    └── Protocol.java                 # TẤT CẢ constants: message types, status codes, ports
 
 src/main/resources/
-+-- sql/schema.sql                      # 17 tables DDL
-+-- css/dark-theme.css                  # Dark mode styles
-+-- css/light-theme.css                 # Light mode styles
-+-- app.properties                      # Server URL config (ngrok / local)
-+-- logback.xml                         # Logging config
+├── sql/schema.sql                    # DDL 17 bảng (DROP/CREATE/USE bị lọc khi runtime init)
+├── css/
+│   ├── dark-theme.css                # CSS dark mode cho JavaFX
+│   └── light-theme.css              # CSS light mode cho JavaFX
+├── app.properties                    # server.baseUrl (local hoặc ngrok)
+└── logback.xml                       # Cấu hình log: file rolling 30 ngày + console
 ```
 
 ---
 
-## Server Components
+## 5. Quy Tắc Coding
+
+### 5.1 Quy Ước Đặt Tên
+
+| Đối tượng | Quy tắc | Ví dụ |
+|-----------|---------|-------|
+| Class / Interface | PascalCase | `ChatServer`, `MessageService` |
+| Method | camelCase | `handleDirectMessage()`, `getUserConversations()` |
+| Field / Variable | camelCase | `onlineClients`, `userId` |
+| Constant (`static final`) | SCREAMING_SNAKE_CASE | `TCP_PORT`, `FILE_CHUNK_SIZE` |
+| Package | lowercase, phân cấp theo vai trò | `com.messenger.server.service` |
+| Resource file | kebab-case | `dark-theme.css`, `schema.sql` |
+
+### 5.2 Package & Trách Nhiệm
+
+Mỗi package có trách nhiệm rõ ràng — **không được vi phạm ranh giới**:
+
+```
+shared.*          → Code dùng chung cả client lẫn server. Không import từ client.* hoặc server.*
+server.service.*  → Business logic. Không gọi trực tiếp socket/UI
+server.db.*       → Chỉ quản lý connection pool. Không chứa business logic
+client.net.*      → Chỉ xử lý transport (WebSocket/HTTP). Không cập nhật UI trực tiếp
+client.ui.*       → Chỉ JavaFX. Mọi thao tác UI phải chạy trên JavaFX Application Thread
+```
+
+### 5.3 Luồng JavaFX (Thread Safety)
+
+> **Quy tắc bắt buộc**: Mọi thao tác cập nhật UI (thêm node, setText, setStyle...) **phải** thực hiện trong `Platform.runLater()`.
+
+```java
+// ĐỌC dữ liệu từ background thread → OK
+String msg = parseJson(raw);
+
+// CẬP NHẬT UI từ background thread → BẮT BUỘC dùng Platform.runLater
+Platform.runLater(() -> {
+    messageListView.getItems().add(msg);
+});
+```
+
+Các callback WebSocket (`RealtimeClient`) và handler TCP (`ClientHandler`) đều chạy trên thread riêng — không bao giờ gọi trực tiếp JavaFX node từ đó.
+
+### 5.4 JSON Protocol
+
+- Tất cả message type dùng **constant từ `Protocol.java`**, không hardcode string.
+- Format request/response: `JsonObject` với Gson, không dùng Map/HashMap khi serialize gửi đi.
+
+```java
+// ĐÚNG
+JsonObject req = new JsonObject();
+req.addProperty("type", Protocol.TYPE_MESSAGE);
+
+// SAI — hardcode string dễ lỗi typo
+req.addProperty("type", "MESSAGE");
+```
+
+### 5.5 Database Access
+
+- Luôn dùng `PreparedStatement` cho mọi câu query có tham số. **Không nối chuỗi SQL** (SQL injection).
+- Lấy connection từ `DatabaseManager.getConnection()` (HikariCP pool) trong khối `try-with-resources`.
+
+```java
+// ĐÚNG
+try (Connection conn = DatabaseManager.getConnection();
+     PreparedStatement ps = conn.prepareStatement("SELECT * FROM users WHERE id = ?")) {
+    ps.setLong(1, userId);
+    ResultSet rs = ps.executeQuery();
+    ...
+}
+
+// SAI — SQL injection
+String sql = "SELECT * FROM users WHERE id = " + userId;
+```
+
+### 5.6 Logging
+
+- Dùng SLF4J `Logger`, không `System.out.println`.
+- Log ở đúng mức: `debug` cho flow bình thường, `info` cho sự kiện quan trọng, `warn` cho trường hợp bất thường, `error` cho exception.
+
+```java
+private static final Logger logger = LoggerFactory.getLogger(MyClass.class);
+
+logger.info("User {} logged in", username);
+logger.error("Failed to save message", e);
+```
+
+### 5.7 Error Handling
+
+- Service method trả lỗi về client qua JSON response có `code` và `message`, không throw exception ra ngoài client.
+- Các exception kết nối / IO trong handler thì log và đóng connection, không để crash server.
+
+### 5.8 Constants & Magic Numbers
+
+Mọi port, timeout, kích thước chunk, giới hạn file đều khai báo trong `Protocol.java`. Không đặt magic number trực tiếp trong code:
+
+```java
+// ĐÚNG
+socket.setSoTimeout(Protocol.SOCKET_TIMEOUT_MS);
+byte[] buf = new byte[Protocol.FILE_CHUNK_SIZE];
+
+// SAI
+socket.setSoTimeout(30000);
+byte[] buf = new byte[8192];
+```
+
+### 5.9 Thêm Message Type Mới
+
+Khi muốn thêm loại message mới, thực hiện theo thứ tự sau:
+
+1. **`Protocol.java`** — Khai báo constant `TYPE_XXX = "XXX"`
+2. **`ClientHandler.java`** — Thêm `case Protocol.TYPE_XXX:` trong switch, gọi `handleXxx(data)`
+3. **`WsChatServer.java`** — Thêm case tương tự (hai file phải đồng bộ)
+4. **`service/XxxService.java`** — Viết business logic
+5. **Client** — Gửi request và xử lý response tương ứng trong `ChatClient.handleServerMessage()`
+
+---
+
+## 6. Giao Thức Truyền Tin (Protocol)
+
+### 6.1 Định Dạng JSON
+
+**Request từ client:**
+```json
+{
+  "type": "MESSAGE",
+  "data": {
+    "receiverId": 42,
+    "content": "Xin chào!",
+    "messageType": "TEXT"
+  }
+}
+```
+
+**Response từ server:**
+```json
+{
+  "type": "SUCCESS",
+  "code": 200,
+  "data": {
+    "messageId": 1001,
+    "timestamp": "2026-06-19T10:30:00"
+  }
+}
+```
+
+**Lỗi:**
+```json
+{
+  "type": "ERROR",
+  "code": 401,
+  "message": "Unauthorized"
+}
+```
+
+### 6.2 Response Codes
+
+| Code | Ý Nghĩa |
+|------|---------|
+| 200 | Thành công |
+| 400 | Lỗi request (dữ liệu sai) |
+| 401 | Chưa đăng nhập / không có quyền |
+| 404 | Không tìm thấy |
+| 409 | Xung đột (user đã tồn tại) |
+| 410 | User offline |
+| 411 | Đã là bạn bè rồi |
+
+### 6.3 Danh Sách Message Types
+
+**Authentication:**
+`REGISTER` | `LOGIN` | `LOGOUT` | `UPDATE_PROFILE`
+
+**Chat:**
+`MESSAGE` | `GROUP_MESSAGE` | `GET_MESSAGE_HISTORY` | `TYPING` | `MESSAGE_STATUS` | `UNSEND` | `REACTION`
+
+**Friends:**
+`SEARCH_USER` | `FRIEND_REQUEST` | `FRIEND_RESPONSE` | `FRIEND_LIST` | `GET_FRIEND_REQUESTS` | `PRESENCE`
+
+**Groups:**
+`GROUP_CREATE` | `GROUP_JOIN` | `GROUP_LEAVE` | `GROUP_MESSAGE` | `GROUP_LIST` | `GROUP_INFO` | `GROUP_UPDATE` | `GROUP_REMOVE_MEMBER` | `GROUP_PROMOTE` | `GROUP_DEMOTE`
+
+**Conversations:**
+`CONVERSATION_LIST` | `CONVERSATION_DELETE`
+
+**Files:**
+`FILE_TRANSFER` | `FILE_CHUNK`
+
+**Calls:**
+`VOICE_CALL_START` | `VOICE_CALL_ACCEPT` | `VOICE_CALL_REJECT` | `VOICE_CALL_END`  
+`VIDEO_CALL_START` | `VIDEO_CALL_ACCEPT` | `VIDEO_CALL_REJECT` | `VIDEO_CALL_END`  
+`RELAY_INFO` | `VIDEO_FRAME` | `VOICE_DATA`
+
+### 6.4 Content Types (messageType)
+
+`TEXT` | `IMAGE` | `FILE` | `VIDEO` | `VOICE` | `STICKER`
+
+### 6.5 Delimiter
+
+Mỗi JSON message kết thúc bằng `\n` (newline). Server đọc từng dòng qua `BufferedReader.readLine()`.
+
+---
+
+## 7. Luồng Dữ Liệu (Data Flow)
+
+### 7.1 Kết Nối
+
+```
+Client khởi động
+  → đọc app.properties → lấy server.baseUrl
+  → RealtimeClient kết nối WebSocket ws://host:9080
+  → Nếu thất bại: fallback TCP port 9000
+  → Sau khi kết nối: gửi LOGIN
+  → Nhận SUCCESS → tự động tải FRIEND_LIST, CONVERSATION_LIST, GROUP_LIST
+```
+
+### 7.2 Tin Nhắn 1-1
+
+```
+A gõ tin → ChatTab gọi send() → RealtimeClient.send(json)
+  → Server WsChatServer nhận
+  → ClientHandler.handleDirectMessage()
+  → MessageService.saveMessage() → MySQL
+  → Nếu B online: forward JsonObject tới B's socket
+  → Gửi MESSAGE_STATUS DELIVERED về A
+```
+
+### 7.3 Tin Nhắn Nhóm
+
+```
+A gửi GROUP_MESSAGE → Server
+  → GroupService.saveGroupMessage() → MySQL
+  → Lặp qua tất cả member online của nhóm → forward
+```
+
+### 7.4 Cuộc Gọi Video
+
+```
+A: prepareForCall() → mở UDP socket
+A: gửi VIDEO_CALL_START (calleeId) → Server
+Server: forward tới B
+B: chấp nhận → VIDEO_CALL_ACCEPT → Server
+Server: MediaRelayServer.createSession() → gán port relay
+Server: gửi RELAY_INFO (sessionId, voicePort, videoPort) → cả A và B
+A+B: gửi JPEG frame → UDP port 9002 → relay → phía kia render
+```
+
+### 7.5 Transfer File (Chunked)
+
+```
+Client: chia file thành chunk 8KB (Protocol.FILE_CHUNK_SIZE)
+Client: gửi FILE_TRANSFER (tên file, số chunk, kích thước)
+Client: gửi từng FILE_CHUNK (fileId, chunkIndex, data Base64)
+Server: FileService tích lũy chunk → ghép lại khi đủ
+Server: lưu đường dẫn vào DB → notify receiver
+```
+
+---
+
+## 8. Database Schema
+
+Database: `gui_chat`, charset `utf8mb4_unicode_ci` — tự động tạo khi server khởi động.
+
+### 8.1 Sơ Đồ Quan Hệ (tóm tắt)
+
+```
+users ──< friend_requests (sender_id, receiver_id)
+users ──< friends (user1_id, user2_id)
+users ──< blocks (blocker_id, blocked_id)
+users ──< user_settings (1-1)
+users ──< login_history
+
+conversations ──< conversation_members >── users
+conversations ──< messages ──< attachments ──< file_chunks
+                  messages ──< message_reactions >── users
+                  messages ──< message_reads >── users
+
+conversations ──< call_sessions ──< call_participants >── users
+```
+
+### 8.2 Bảng Chính
+
+| Bảng | Mục Đích | Cột Quan Trọng |
+|------|----------|----------------|
+| `users` | Tài khoản | `username` UNIQUE, `password_hash`, `presence` ENUM, `last_seen` |
+| `user_settings` | Cài đặt | `theme` ENUM(LIGHT/DARK), `language_code`, `notification_enabled` |
+| `login_history` | Audit | `ip_address`, `device_info`, `login_time`, `logout_time` |
+| `friend_requests` | Lời mời kết bạn | `sender_id`, `receiver_id`, `status` ENUM(PENDING/ACCEPTED/REJECTED) |
+| `friends` | Cặp bạn bè | `user1_id`, `user2_id`, UNIQUE constraint |
+| `blocks` | Danh sách chặn | `blocker_id`, `blocked_id` |
+| `conversations` | Phòng chat | `type` ENUM(PRIVATE/GROUP), `title`, `owner_id` |
+| `conversation_members` | Thành viên | `role` ENUM(ADMIN/MEMBER), UNIQUE(conversation_id, user_id) |
+| `messages` | Tin nhắn | `message_type` ENUM, `status` ENUM, `is_unsent`, `reply_to_id` |
+| `attachments` | File đính kèm | `file_name`, `file_path`, `mime_type`, `file_size` |
+| `file_chunks` | Chunk metadata | `chunk_index`, UNIQUE(attachment_id, chunk_index) |
+| `message_reactions` | Reaction | `reaction_type` ENUM(LIKE/LOVE/HAHA/WOW/SAD/ANGRY), UNIQUE(message_id, user_id) |
+| `message_reads` | Đã đọc | `read_at`, UNIQUE(message_id, user_id) |
+| `notifications` | Hàng đợi thông báo | `is_read`, `created_at` |
+| `typing_status` | Đang gõ | PRIMARY KEY(conversation_id, user_id) |
+| `call_sessions` | Lịch sử gọi | `call_type` ENUM(VOICE/VIDEO), `status` ENUM |
+| `call_participants` | Người tham gia gọi | `joined_at`, `left_at` |
+
+### 8.3 Index Hiệu Năng
+
+```sql
+CREATE INDEX idx_msg_conv_time ON messages(conversation_id, created_at);
+CREATE INDEX idx_msg_sender    ON messages(sender_id);
+CREATE INDEX idx_conv_member_user ON conversation_members(user_id);
+```
+
+---
+
+## 9. Các Thành Phần Server
 
 ### ChatServer.java
 
-Entry point. Starts 3 services:
-- TCP Server (port 9000)
-- WebSocket Server (port 9080)
-- MediaRelayServer (UDP ports 9001, 9002)
+Entry point server. Khởi động 3 service:
+- TCP Server trên port **9000** — `ClientHandler` (một thread per connection)
+- WebSocket Server trên port **9080** — `WsChatServer`
+- UDP MediaRelay trên port **9001** (voice) và **9002** (video)
 
-Manages Map<Long, ClientHandler> onlineClients.
+Duy trì `Map<Long, ClientHandler> onlineClients` — tra cứu nhanh người dùng online theo userId.
 
-### ClientHandler.java
+### ClientHandler.java / WsChatServer.java
 
-TCP client handler. Parses JSON lines, dispatches by type field. ~40 message types:
+Hai file này xử lý **cùng protocol JSON** nhưng trên hai transport khác nhau. Khi thêm tính năng mới phải cập nhật **cả hai**.
 
-- Auth: REGISTER, LOGIN, LOGOUT, UPDATE_PROFILE
-- Messages: MESSAGE, GROUP_MESSAGE, GET_MESSAGE_HISTORY, TYPING, MESSAGE_STATUS, UNSEND, REACTION
-- Friends: FRIEND_REQUEST/RESPONSE, FRIEND_LIST, SEARCH_USER, GET_FRIEND_REQUESTS
-- Groups: GROUP_CREATE/JOIN/LEAVE/LIST/INFO/UPDATE, GROUP_REMOVE_MEMBER, PROMOTE/DEMOTE
-- Conversations: CONVERSATION_LIST, CONVERSATION_DELETE
-- Files: FILE_TRANSFER, FILE_CHUNK
-- Calls: VOICE/VIDEO_CALL_START/ACCEPT/REJECT/END
-- WebRTC: SDP_OFFER/ANSWER, ICE_CANDIDATE, RELAY_INFO
-
-### WsChatServer.java
-
-WebSocket mirror of ClientHandler. Same JSON protocol. Auto-fallback ngrok env local.
+Dispatch theo field `type` trong JSON:
+```java
+switch (type) {
+    case Protocol.TYPE_MESSAGE -> handleDirectMessage(data);
+    case Protocol.TYPE_LOGIN   -> handleLogin(data);
+    // ...
+}
+```
 
 ### DatabaseManager.java
 
-- HikariCP connection pool (max 20, min 3)
-- Schema init from sql/schema.sql (skips DROP/CREATE/USE on startup)
-- Migration support via ALTER TABLE IF NOT EXISTS
+- Pool HikariCP: max 20, min 3 connection
+- Tự init schema từ `sql/schema.sql` khi startup (lọc bỏ DROP/CREATE DATABASE/USE)
+- Migration: dùng `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` để không break schema hiện có
 
 ### Service Classes
 
-**AuthService** — Register (BCrypt), Login, profile update, friend request send/accept/reject, friend list, search users, presence tracking.
-
-**ConversationService** — Find/create private conversations (lazy creation on first message), group conversations, member management, getUserConversations with last message preview.
-
-**GroupService** — Create groups, add/remove members, promote/demote, save group messages, get group info.
-
-**MessageService** — Save messages, load history (pagination via beforeId), unsend, update delivery, markDeliveredForUser (SENT -> DELIVERED on login).
-
-**FileService** — Chunked file upload, reassembly, download, delete.
+| Service | Trách Nhiệm |
+|---------|-------------|
+| `AuthService` | Đăng ký (BCrypt hash), đăng nhập, update profile, friend request, presence |
+| `ConversationService` | Tìm/tạo private conversation (lazy creation), group conversation, lấy danh sách có preview |
+| `GroupService` | Tạo nhóm, thêm/xóa/promote/demote member, lưu group message, lấy group info |
+| `MessageService` | Lưu message, lấy history (pagination theo `beforeId`), unsend, delivery tracking |
+| `FileService` | Upload chunked, reassembly, download, xóa file vật lý |
 
 ### MediaRelayServer.java
 
-Simple TURN-like UDP relay on ports 9001 (voice) and 9002 (video). Two-slot sessions, relay starts when both peers registered.
+TURN-like relay đơn giản. Mỗi cuộc gọi có một "session" gồm 2 slot (A và B). Relay bắt đầu khi cả hai peer đã đăng ký. Không store traffic — chỉ forward UDP packet.
 
 ---
 
-## Client Components
+## 10. Các Thành Phần Client
 
 ### ChatClient.java
 
-JavaFX Application. Manages transport selection (WebSocket vs TCP), scene switching, message routing (handleServerMessage -> MainView.onServerMessage), connection lifecycle.
+`Application` JavaFX — entry point. Quản lý:
+- Lựa chọn transport (WebSocket vs TCP)
+- Chuyển scene (Login → Register → Main)
+- Route `handleServerMessage()` → `MainView.onServerMessage()`
+- Lifecycle kết nối (reconnect, logout)
 
 ### RealtimeClient.java
 
-WebSocket client via java.net.http.WebSocket. Features: auto-reconnect fallback (ngrok -> local), JSON parsing with buffering, listener pattern, ngrok header support.
+WebSocket client dùng `java.net.http.WebSocket`. Tính năng:
+- Auto-reconnect: thử ngrok URL trước, fallback về localhost
+- Buffer JSON không đầy đủ (message có thể đến từng phần)
+- Listener pattern — callback khi nhận message
+- Header `ngrok-skip-browser-warning` khi dùng ngrok
 
 ### MainView.java
 
-4-column Zalo-inspired layout: NavRail (68px) + Sidebar (320px) + Content Area + Right Info Panel (280px). Handles tab switching, call UI, message context menu, theme toggle, notifications, global search.
+Layout 4 cột kiểu Zalo:
+- **NavRail** (68px) — icon chuyển tab
+- **Sidebar** (320px) — danh sách hội thoại / bạn bè / profile
+- **Content Area** — vùng chat chính
+- **Right Info Panel** (280px) — thông tin người dùng / nhóm
 
-### ChatTab.java (~1888 lines)
+### ChatTab.java (~1888 dòng)
 
-Core chat component:
-- ConvItem: conversation list item (name, lastMsg, time, avatar, online, unread)
-- Conversation list with custom cell rendering
-- Message area with bubble rendering:
-  - Mine (right, blue) / Theirs (left, gray)
-  - Text, Sticker, Image (ImageView with click-to-enlarge), File
-  - Reply quote, time, status ticks
-- Reply, Emoji picker, Group creation, Group info popup, Image viewer
-
-### ContactsTab.java
-
-Friend requests (accept/reject) + alphabetically sorted friend list.
+Component chat cốt lõi. Xử lý:
+- `ConvItem` — item trong danh sách hội thoại (tên, tin nhắn cuối, thời gian, avatar, badge unread)
+- Custom `ListCell` cho conversation list
+- Render message bubble: tin của mình (phải, xanh) / tin của người khác (trái, xám)
+- Loại nội dung: Text, Sticker, Image (click phóng to), File
+- Reply quote, emoji picker, context menu, group info popup
 
 ### Call Handlers
 
-**VoiceCallHandler**: PCM 16kHz mono capture/playback, noise gate (RMS 0.008), AGC, jitter buffer (60ms), UDP relay.
+**VoiceCallHandler**: Capture PCM 16kHz mono → noise gate (RMS threshold 0.008) → AGC → jitter buffer 60ms → UDP relay.
 
-**VideoCallHandler**: Sarxos webcam capture -> 320x240 -> JPEG -> UDP relay. Remote render + local PiP. Camera switching, toggle mid-call.
-
----
-
-## Shared Protocol & Models
-
-### Protocol.java
-
-38 message types, response codes (200/400/401/404/409/410/411), message statuses (SENT/DELIVERED/SEEN), content types (TEXT/IMAGE/FILE/VIDEO/VOICE/STICKER), reactions (6 emoji), roles (ADMIN/MEMBER).
-
-### Message Format
-
-Request: `{"type": "MESSAGE", "data": {...}}`
-Response: `{"type": "SUCCESS", "code": 200, "data": {...}}`
-
-### Models
-
-- Message: id, conversationId, senderId, content, messageType, status, unsent, timestamps + transient fields
-- User: id, username, passwordHash, displayName, email, avatarUrl, presence
-- Group: id, name, creatorId, members (GroupMember with userId + role)
-- FriendRequest: id, senderId, receiverId, status
+**VideoCallHandler**: Sarxos webcam → resize 320×240 → encode JPEG → UDP → decode và render phía nhận. Hỗ trợ local PiP và đổi camera mid-call.
 
 ---
 
-## Database Schema
+## 11. Tính Năng Hiện Có
 
-17 tables in database gui_chat:
+### Hoàn Thành ✅
 
-| Table | Purpose | Key Columns |
-|---|---|---|
-| users | Accounts | id, username, password_hash, display_name, avatar_url, presence, last_seen |
-| user_settings | Preferences | theme, language_code, notification_enabled |
-| login_history | Audit | ip_address, device_info |
-| friend_requests | Request queue | sender_id, receiver_id, status |
-| friends | Pairs | user1_id, user2_id |
-| blocks | Block list | blocker_id, blocked_id |
-| conversations | Chat rooms | type (PRIVATE/GROUP), title, owner_id, description |
-| conversation_members | Members | user_id, role (ADMIN/MEMBER) |
-| messages | All messages | conversation_id, sender_id, content, message_type, status, is_unsent, reply_to_id |
-| attachments | Files | file_name, file_path, mime_type, file_size |
-| file_chunks | Chunk metadata | chunk_index, chunk_path |
-| message_reactions | Reactions | reaction_type (6 types) |
-| message_reads | Read receipts | read_at |
-| notifications | Queue | title, content, is_read |
-| typing_status | Typing | is_typing, updated_at |
-| call_sessions | Call history | call_type, status, started_at, ended_at |
-| call_participants | Participants | joined_at, left_at |
-
----
-
-## Transport & Data Flow
-
-### Connection
-
-```
-Client -> read app.properties -> HTTP? -> WebSocket (wss) : TCP
-    -> Login -> SUCCESS -> Request friends, conversations, groups
-```
-
-### Private Message
-
-```
-A send() -> "MESSAGE" + receiverId
-Server handleDirectMessage -> saveMessage(DB) -> forward if B online -> status back
-```
-
-### Group Message
-
-```
-A send() -> "GROUP_MESSAGE" + groupId
-Server handleGroupMessage -> saveGroupMessage(DB) -> forward to all online members
-```
-
-### Video Call
-
-```
-A prepareForCall() (UDP socket)
-A -> VIDEO_CALL_START -> server -> B
-B accept -> VIDEO_CALL_ACCEPT -> server creates session
-Server -> RELAY_INFO (sessionId + ports) -> A + B
-A capture webcam -> JPEG -> UDP relay -> B
-B capture -> JPEG -> UDP relay -> A
-```
-
----
-
-## Features
-
-### Done
-
-- Register/Login with BCrypt
-- Dark/Light theme toggle
-- 1-1 chat: text, emoji, stickers, reply, unsend, reactions (6), typing indicator, status ticks
-- Group chat: create, add/remove members, promote/demote admin, rename, description, info popup, leave
-- Image send/render with click-to-enlarge viewer
-- File send with chunked transfer
-- Friend system: search, request, accept/reject, alphabetical list
-- Voice call: PCM 16kHz, noise gate, AGC, jitter buffer, UDP relay
-- Video call: Sarxos webcam, JPEG + UDP relay, remote + local PiP, camera toggle
-- Desktop notifications
-- Conversation list with last message preview
+- Đăng ký / Đăng nhập với BCrypt
+- Dark / Light theme toggle
+- Chat 1-1: text, emoji, sticker, reply, unsend, 6 reaction, typing indicator, status tick
+- Chat nhóm: tạo, thêm/xóa member, promote/demote admin, đổi tên, mô tả, info popup, rời nhóm
+- Gửi hình (click phóng to)
+- Gửi file (chunked transfer)
+- Hệ thống bạn bè: tìm kiếm, gửi/chấp nhận/từ chối lời mời, danh sách theo alphabet
+- Gọi voice: PCM 16kHz, noise gate, AGC, jitter buffer, UDP relay
+- Gọi video: webcam Sarxos, JPEG + UDP relay, remote + local PiP, đổi camera
+- Desktop notification
+- Danh sách hội thoại với preview tin nhắn cuối
 - Online/offline presence
-- Local message cache (JSON files in chat_history/)
-- Server message persistence (MySQL)
+- Cache tin nhắn local (JSON file trong `chat_history/`)
+- Persistence tin nhắn trên server (MySQL)
 
-### Missing
+### Chưa Làm / Còn Thiếu ❌
 
-- Multi-device login
-- End-to-end encryption
-- Forward message
-- Search within conversation
-- Block user (DB exists, no code)
-- Unfriend (no code)
-- Call history (DB exists, no code)
-- Voice message (DB type exists, no capture UI)
-- Link preview
-- @Mention
-- Pin conversation server-side
-- Mute conversation
-- Sound on new message
-- Scroll-to-bottom button
+Xem chi tiết trong [MISSING_FEATURES.md](MISSING_FEATURES.md). Tóm tắt:
+
+| Nhóm | Số Tính Năng Thiếu |
+|------|--------------------|
+| Nhắn tin | 11 |
+| Cuộc gọi | 4 |
+| Kết bạn & Danh bạ | 3 |
+| Giao diện & UX | 7 |
+| Bảo mật | 7 vấn đề |
+| Kiến trúc & QoL | 4 vấn đề |
 
 ---
 
-## Build & Run
+## 12. Hướng Dẫn Build & Chạy
 
-### Prerequisites
+### Yêu Cầu
 
-- Java 17+
-- MySQL 8.x running on 127.0.0.1:3306
-- Maven 3.8+
+- Java 17+ (kiểm tra: `java -version`)
+- MySQL 8.x chạy trên `127.0.0.1:3306`
+- Maven 3.8+ (kiểm tra: `mvn -version`)
 
-### Build
+### Build (đóng gói fat JAR)
 
 ```bash
 mvn clean package -DskipTests
 ```
 
-### Run Server
+### Chạy Server
 
 ```bash
+# Cách 1 — Maven exec (khuyến nghị khi dev)
 mvn compile exec:java
+
+# Cách 2 — chỉ định class
+mvn exec:java -Dexec.mainClass="com.messenger.server.ChatServer"
 ```
 
-Or: `mvn exec:java -Dexec.mainClass="com.messenger.server.ChatServer"`
+Server tự tạo database `gui_chat` và khởi tạo schema nếu chưa tồn tại.
 
-### Run Client
+### Chạy Client
 
 ```bash
 mvn javafx:run
 ```
 
-Cannot use `java -jar` (JavaFX module requirement).
+> **Không dùng** `java -jar target/messenger-app-1.0.0-jar-with-dependencies.jar` — JavaFX sẽ không nhận module path đúng.
 
-### Config
+---
 
-Edit `src/main/resources/app.properties`:
-- Local: `server.baseUrl=http://localhost:9080`
-- Ngrok: `server.baseUrl=https://your-ngrok-url.ngrok-free.dev`
+## 13. Cấu Hình
+
+### app.properties (`src/main/resources/app.properties`)
+
+```properties
+# Local (mặc định)
+server.baseUrl=http://localhost:9080
+
+# Ngrok (khi muốn kết nối từ xa)
+server.baseUrl=https://your-ngrok-url.ngrok-free.dev
+```
+
+Client đọc file này qua `AppConfig.java` để xác định URL WebSocket và base HTTP.
 
 ### Ports
 
 | Port | Service | Protocol |
-|---|---|---|
-| 9000 | ChatServer (TCP) | Legacy JSON-over-TCP |
-| 9001 | MediaRelay (Voice) | UDP PCM audio |
-| 9002 | MediaRelay (Video) | UDP JPEG frames |
-| 9080 | ChatServer (WebSocket) | JSON-over-WS |
+|------|---------|----------|
+| 9000 | ChatServer (TCP) | JSON-over-TCP (legacy) |
+| 9001 | MediaRelayServer (Voice) | UDP PCM audio |
+| 9002 | MediaRelayServer (Video) | UDP JPEG frames |
+| 9080 | WsChatServer (WebSocket) | JSON-over-WebSocket |
 | 3306 | MySQL | JDBC |
+
+### Cấu Hình MySQL
+
+DatabaseManager dùng hardcode credentials mặc định:
+- Host: `127.0.0.1:3306`
+- Database: `gui_chat` (tự tạo)
+- User: `root`, Password: `` (rỗng)
+
+> ⚠️ **Bảo mật**: Đây là cấu hình dev/demo. Không deploy lên production với credentials này.
+
+### Logging (`logback.xml`)
+
+Log ra console và file `logs/messenger*.log`:
+- Rolling daily, giữ 30 ngày
+- Giới hạn 500MB/file
+- Cấp độ mặc định: `INFO`
 
 ---
 
-## Troubleshooting
+## 14. Troubleshooting
 
-### JavaFX missing error
+### Lỗi JavaFX không tìm thấy
 
-Always use `mvn javafx:run` for client. Do not use `java -jar`.
+```
+Error: JavaFX runtime components are missing
+```
+**Giải pháp**: Luôn dùng `mvn javafx:run`. Không dùng `java -jar`.
 
-### MySQL connection refused
+### MySQL Connection Refused
 
-Ensure MySQL is running on 127.0.0.1:3306. Database gui_chat is auto-created.
+```
+HikariPool: Failed to validate connection
+```
+**Giải pháp**:
+1. Đảm bảo MySQL đang chạy: `mysql -u root -e "SELECT 1"`
+2. Kiểm tra port 3306 không bị chiếm
+3. Database `gui_chat` sẽ tự tạo — không cần tạo thủ công
 
-### WebSocket failure
+### WebSocket kết nối thất bại
 
-Check server is running, check app.properties URL. Client auto-falls back from ngrok to local.
+```
+RealtimeClient: Connection failed, trying fallback
+```
+**Giải pháp**:
+1. Xác nhận server đã khởi động và lắng nghe port 9080
+2. Kiểm tra `app.properties` đúng URL
+3. Client tự fallback sang localhost nếu ngrok thất bại
 
-### Logs
+### Webcam không nhận diện (Video Call)
 
-Files in logs/messenger*.log (rolling, 30 days, 500MB cap). Console + file configured in logback.xml.
+Sarxos webcam-capture 0.3.12 có thể không tương thích một số webcam trên JDK 17+. Kiểm tra log khi bắt đầu video call.
+
+### Xem Logs
+
+```bash
+# Log file (rolling)
+tail -f logs/messenger.log
+
+# Hoặc xem console khi chạy mvn
+```
+
+---
+
+*Cập nhật lần cuối: 2026-06-19*

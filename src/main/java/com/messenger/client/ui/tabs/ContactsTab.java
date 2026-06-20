@@ -131,6 +131,17 @@ public class ContactsTab {
         return pendingRequests.size();
     }
 
+    /** Cập nhật trạng thái online/offline của bạn bè — gọi từ MainView khi nhận PRESENCE */
+    public void updatePresence(long uid, boolean online) {
+        for (User u : friends) {
+            if (u.getId() == uid) {
+                u.setPresence(online ? "ONLINE" : "OFFLINE");
+                refreshFriendPanel();
+                return;
+            }
+        }
+    }
+
     /**
      * Load pending friend requests from server response.
      */
