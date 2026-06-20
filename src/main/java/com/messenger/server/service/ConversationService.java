@@ -133,6 +133,25 @@ public final class ConversationService {
     }
 
     /**
+     * Remove a user from a conversation (hide/delete from their list).
+     * The conversation and its messages are preserved for other members.
+     */
+    public static boolean hideConversation(long conversationId, long userId) {
+        String sql = "DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, conversationId);
+            ps.setLong(2, userId);
+            int rows = ps.executeUpdate();
+            logger.info("User {} removed from conversation {}", userId, conversationId);
+            return rows > 0;
+        } catch (SQLException e) {
+            logger.error("Failed to hide conversation {} for user {}: {}", conversationId, userId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Get all member IDs of a conversation.
      */
     public static List<Long> getMembers(long conversationId) {

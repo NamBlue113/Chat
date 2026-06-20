@@ -148,11 +148,20 @@ public class WsChatServer extends WebSocketServer {
             case Protocol.TYPE_VIDEO_CALL_START: case Protocol.TYPE_VIDEO_CALL_ACCEPT:
             case Protocol.TYPE_VIDEO_CALL_REJECT: case Protocol.TYPE_VIDEO_CALL_END:
                 handleCallSignal(c, s, type, d); break;
+            case Protocol.TYPE_CONVERSATION_DELETE: handleConversationDelete(c,s,d); break;
             case Protocol.TYPE_VIDEO_FRAME:
                 handleVideoFrame(c, s, d); break;
             default: sendError(c,400,"Unknown: "+type);
             
         }
+    }
+
+    private void handleConversationDelete(WebSocket c, WsSession s, JsonObject d) {
+        if (s.userId <= 0) return;
+        long convId = d.has("conversationId") ? d.get("conversationId").getAsLong() : -1;
+        if (convId <= 0) { sendError(c, 400, "conversationId required"); return; }
+        boolean success = ConversationService.hideConversation(convId, s.userId);
+        send(c, success ? ok() : err(400, "Failed to delete conversation"));
     }
 
     private void handleVideoFrame(WebSocket c, WsSession s, JsonObject d) {

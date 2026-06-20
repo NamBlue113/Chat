@@ -194,6 +194,9 @@ public class ClientHandler implements Runnable {
             case Protocol.TYPE_VIDEO_CALL_END:
                 handleCallSignal(type, data);
                 break;
+            case Protocol.TYPE_CONVERSATION_DELETE:
+                handleConversationDelete(data);
+                break;
             case Protocol.TYPE_VIDEO_FRAME:
                 handleVideoFrame(data);
                 break;
@@ -201,6 +204,18 @@ public class ClientHandler implements Runnable {
                 logger.warn("Unknown message type: {}", type);
                 sendError(Protocol.CODE_ERROR, "Unknown message type: " + type);
         }
+    }
+
+    private void handleConversationDelete(JsonObject data) {
+        if (userId <= 0) return;
+        long convId = data.has("conversationId") ? data.get("conversationId").getAsLong() : -1;
+        if (convId <= 0) { sendError(Protocol.CODE_ERROR, "conversationId required"); return; }
+        boolean success = ConversationService.hideConversation(convId, userId);
+        JsonObject response = new JsonObject();
+        response.addProperty("type", Protocol.TYPE_SUCCESS);
+        response.addProperty("code", 200);
+        if (success) send(response);
+        else sendError(Protocol.CODE_ERROR, "Failed to delete conversation");
     }
 
     private void handleVideoFrame(JsonObject data) {

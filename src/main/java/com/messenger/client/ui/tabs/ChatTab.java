@@ -81,6 +81,7 @@ public class ChatTab {
     private final ObservableList<ConvItem> listItems = FXCollections.observableArrayList();
     private VBox msgArea;
     private ScrollPane msgScroll;
+    private VBox chatAreaVBox;
     private TextField input;
     private Label typingLbl, hdrName, hdrStatus;
     private StackPane hdrAvatar;
@@ -200,7 +201,10 @@ public class ChatTab {
 
     /** Lấy node khu vực chat (header + messages + input - dùng cho layout Messenger) */
     public javafx.scene.Node getChatAreaNode() {
-        if (chatAreaNode == null) chatAreaNode = buildChatArea();
+        if (chatAreaNode == null) {
+            chatAreaNode = buildChatArea();
+            buildEmojiPopup();
+        }
         return chatAreaNode;
     }
 
@@ -414,6 +418,7 @@ public class ChatTab {
 
         Button sb = new Button(); sb.getStyleClass().add("btn-send"); setTT(sb,"G\u1EEDi"); sb.setOnAction(e->send()); ib.getChildren().add(sb);
         ca.getChildren().add(ib);
+        chatAreaVBox = ca;
         return ca;
     }
 
@@ -483,7 +488,82 @@ public class ChatTab {
             pickerTabs.getTabs().add(stickerTab);
         }
 
+        // Tab Icon — load PNG từ /icons/ classpath
+        Tab iconTab = new Tab("🖼 Icon");
+        iconTab.getStyleClass().add("sticker-tab");
+        FlowPane iconGrid = new FlowPane(6, 6);
+        iconGrid.setPadding(new Insets(10));
+        iconGrid.setPrefWrapLength(280);
+
+        for (String iconFile : ICON_FILES) {
+            try {
+                java.io.InputStream is = ChatTab.class.getResourceAsStream("/icons/" + iconFile);
+                if (is == null) continue;
+                javafx.scene.image.Image img = new javafx.scene.image.Image(is, 48, 48, true, true);
+                ImageView iv = new ImageView(img);
+                iv.setFitWidth(48);
+                iv.setFitHeight(48);
+                iv.setPreserveRatio(true);
+
+                StackPane iconItem = new StackPane(iv);
+                iconItem.setMinSize(58, 58);
+                iconItem.setMaxSize(58, 58);
+                iconItem.setStyle("-fx-background-color: transparent; -fx-cursor: hand; -fx-background-radius: 8; -fx-padding: 4;");
+                iconItem.setOnMouseEntered(e -> iconItem.setStyle("-fx-background-color: #3A3D52; -fx-cursor: hand; -fx-background-radius: 8; -fx-padding: 4;"));
+                iconItem.setOnMouseExited(e -> iconItem.setStyle("-fx-background-color: transparent; -fx-cursor: hand; -fx-background-radius: 8; -fx-padding: 4;"));
+                final String fname = iconFile;
+                iconItem.setOnMouseClicked(e -> { sendIconMessage(fname); emojiPopup.hide(); });
+                Tooltip.install(iconItem, new Tooltip(iconFile.replace(".png", "")));
+                iconGrid.getChildren().add(iconItem);
+            } catch (Exception ignored) {}
+        }
+
+        ScrollPane iconScroll = new ScrollPane(iconGrid);
+        iconScroll.setFitToWidth(true);
+        iconScroll.setStyle("-fx-background-color: transparent;");
+        iconTab.setContent(iconScroll);
+        pickerTabs.getTabs().add(iconTab);
+
         emojiPopup.getContent().add(pickerTabs);
+    }
+
+    private static final String[] ICON_FILES = {
+        "Slightly Smiling Face Emoji.png", "Upside-Down Face Emoji.png",
+        "Smiling Face with Tightly Closed eyes.png", "Tears of Joy Emoji.png",
+        "Smirk Face Emoji.png", "Sad Face Emoji.png", "Nerd Emoji With Glasses.png",
+        "Smiling Face Emoji with Blushed Cheeks.png", "Sunglasses Emoji.png",
+        "Hungry Face Emoji.png", "Face without Mouth Emoji.png", "Thinking Emoji.png",
+        "Heart Eyes Emoji.png", "Hushed Face Emoji.png", "Eye Roll Emoji.png",
+        "Cold Sweat Emoji.png", "OMG Face Emoji.png", "Flushed Face Emoji.png",
+        "Smiling Face with Halo.png", "Sleeping Emoji.png", "Very Mad Emoji.png",
+        "Very Angry Emoji.png", "Loudly Crying Face Emoji.png",
+        "Disappointed but Relieved Face Emoji.png", "Smiling Devil Emoji.png",
+        "Alien Emoji.png", "heart.png", "Thumbs Up Hand Sign Emoji.png"
+    };
+
+    private void sendIconMessage(String filename) {
+        if (active == null) return;
+        String content = "[ICON:" + filename + "]";
+        long ts = System.currentTimeMillis();
+        JsonObject msgData = new JsonObject();
+        if (active.isGroup) {
+            msgData.addProperty("groupId", active.uid);
+        } else {
+            msgData.addProperty("receiverId", active.uid);
+        }
+        msgData.addProperty("content", content);
+        msgData.addProperty("messageType", "IMAGE");
+        if (replyToMsgId > 0) {
+            msgData.addProperty("replyToId", replyToMsgId);
+            msgData.addProperty("replyToContent", replyToContent);
+            msgData.addProperty("replyToSender", replyToSender);
+        }
+        client.send(active.isGroup ? Protocol.TYPE_GROUP_MESSAGE : Protocol.TYPE_MESSAGE, msgData);
+        bubble("Bạn", content, ts, true, active.uid, "IMAGE", "SENT", ts);
+        active.lastMsg = "🖼 Icon";
+        active.time = timeFmt.format(new Date(ts));
+        listView.refresh();
+        cancelReply();
     }
 
     private void sendSticker(String packId, int index) {
@@ -520,7 +600,9 @@ public class ChatTab {
     private void toggleEmojiPicker() {
         if (emojiPopup.isShowing()) { emojiPopup.hide(); return; }
         javafx.geometry.Bounds b = emojiBtn.localToScreen(emojiBtn.getBoundsInLocal());
-        emojiPopup.show(emojiBtn, b.getMinX(), b.getMaxY() - emojiPopup.getHeight());
+        // Hiện popup phía trên nút; dùng prefHeight=330 vì getHeight()=0 khi chưa show lần nào
+        double popupH = emojiPopup.getHeight() > 0 ? emojiPopup.getHeight() : 330;
+        emojiPopup.show(emojiBtn, b.getMinX(), b.getMinY() - popupH);
     }
 
     private void insertEmoji(String emoji) {
@@ -878,10 +960,20 @@ public class ChatTab {
             }
         }
 
-        // Xử lý group info response
-        if(d.has("members") && d.get("members").isJsonArray() && d.has("id")) {
-            long gid = d.get("id").getAsLong();
+        // Xử lý group info response — getGroupInfo() trả về ownerId (từ DB)
+        if(d.has("members") && d.get("members").isJsonArray() && d.has("id") && d.has("ownerId")) {
             Platform.runLater(() -> openGroupInfoDialog(d));
+            return;
+        }
+
+        // Nhóm vừa tạo — server Gson-serialize Group model, có creatorId
+        if (d.has("id") && d.has("name") && d.has("creatorId")) {
+            long gid = d.get("id").getAsLong();
+            String gname = d.get("name").getAsString();
+            Platform.runLater(() -> {
+                addConv(gname, gid, false, true);
+                listView.refresh();
+            });
         }
     }
 
@@ -1083,7 +1175,11 @@ public class ChatTab {
             // Bỏ padding của bubble cho sticker
             bubbleBox.setPadding(new Insets(6, 8, 4, 8));
         } else if ("IMAGE".equals(messageType) && content != null && !content.isEmpty()) {
-            addImageContent(bubbleBox, content, mine);
+            if (content.startsWith("[ICON:")) {
+                addIconContent(bubbleBox, content, mine);
+            } else {
+                addImageContent(bubbleBox, content, mine);
+            }
         } else if ("FILE".equals(messageType) && content != null && !content.isEmpty()) {
             addFileContent(bubbleBox, content, mine);
         } else {
@@ -1128,22 +1224,32 @@ public class ChatTab {
         final boolean fMine = mine;
         bubbleBox.setOnContextMenuRequested(ev -> {
             ContextMenu bubbleMenu = new ContextMenu();
-            MenuItem replyItem = new MenuItem("\uD83D\uDC49 Tr\u1EA3 l\u1EDDi");
+
+            // Emoji reactions \u2014 inline HBox (kh\u00F4ng c\u1EA7n hover sub-menu)
+            HBox rxBox = new HBox(4);
+            rxBox.setPadding(new Insets(4, 8, 4, 8));
+            rxBox.setAlignment(Pos.CENTER_LEFT);
+            String[] rxEmojis = {"\u2764\uFE0F", "\uD83D\uDC4D", "\uD83D\uDE02", "\uD83D\uDE2E", "\uD83D\uDE22", "\uD83D\uDE21"};
+            for (String rx : rxEmojis) {
+                Button rxBtn = new Button(rx);
+                rxBtn.setFont(Font.font(18));
+                rxBtn.setStyle("-fx-background-color: transparent; -fx-cursor: hand; -fx-padding: 2 4;");
+                rxBtn.setOnMouseEntered(e2 -> rxBtn.setStyle("-fx-background-color: rgba(255,255,255,0.12); -fx-cursor: hand; -fx-background-radius: 6; -fx-padding: 2 4;"));
+                rxBtn.setOnMouseExited(e2 -> rxBtn.setStyle("-fx-background-color: transparent; -fx-cursor: hand; -fx-padding: 2 4;"));
+                rxBtn.setOnAction(e -> { sendRx(fMsgId, rx); bubbleMenu.hide(); });
+                rxBox.getChildren().add(rxBtn);
+            }
+            CustomMenuItem reactionsRow = new CustomMenuItem(rxBox, false);
+            bubbleMenu.getItems().add(reactionsRow);
+            bubbleMenu.getItems().add(new SeparatorMenuItem());
+
+            MenuItem replyItem = new MenuItem("\u21A9 Tr\u1EA3 l\u1EDDi");
             replyItem.setOnAction(e -> startReply(senderName, content, fMsgId, row));
             bubbleMenu.getItems().add(replyItem);
 
-            MenuItem forwardItem = new MenuItem("\u27A1\uFE0F Chuy\u1EC3n ti\u1EBFp");
+            MenuItem forwardItem = new MenuItem("\u27A1 Chuy\u1EC3n ti\u1EBFp");
             forwardItem.setOnAction(e -> forwardMessage(senderName, content, fMsgId));
             bubbleMenu.getItems().add(forwardItem);
-
-            Menu reactionsItem = new Menu("\uD83D\uDC4D C\u1EA3m x\u00FAc");
-            String[] rxEmojis = {"\u2764\uFE0F","\uD83D\uDC4D","\uD83D\uDE02","\uD83D\uDE2E","\uD83D\uDE22","\uD83D\uDE21"};
-            for (String rx : rxEmojis) {
-                MenuItem rxi = new MenuItem(rx);
-                rxi.setOnAction(e -> sendRx(fMsgId, rx));
-                reactionsItem.getItems().add(rxi);
-            }
-            bubbleMenu.getItems().add(reactionsItem);
 
             if (fMine) {
                 bubbleMenu.getItems().add(new SeparatorMenuItem());
@@ -1199,10 +1305,10 @@ public class ChatTab {
         closeReply.setOnAction(e -> cancelReply());
         HBox.setHgrow(quoteContent, Priority.ALWAYS);
 
-        VBox chatArea = (VBox) msgScroll.getParent();
-        int idx = chatArea.getChildren().indexOf(typingLbl);
-        if (idx >= 0 && !chatArea.getChildren().contains(replyQuoteBar)) {
-            chatArea.getChildren().add(idx + 1, replyQuoteBar);
+        if (chatAreaVBox == null) return;
+        int idx = chatAreaVBox.getChildren().indexOf(typingLbl);
+        if (idx >= 0 && !chatAreaVBox.getChildren().contains(replyQuoteBar)) {
+            chatAreaVBox.getChildren().add(idx + 1, replyQuoteBar);
             replyQuoteBar.setVisible(true);
         }
         replyQuoteBar.getChildren().addAll(closeReply, quoteContent);
@@ -1215,11 +1321,47 @@ public class ChatTab {
         if (replyQuoteBar != null) {
             replyQuoteBar.getChildren().clear();
             replyQuoteBar.setVisible(false);
+            if (chatAreaVBox != null) chatAreaVBox.getChildren().remove(replyQuoteBar);
         }
     }
 
-    private void forwardMessage(String senderName, String content, long msgId) {
-        callback.showAlert("Forward", "T\u00EDnh n\u0103ng \u0111ang ph\u00E1t tri\u1EC3n");
+    private void forwardMessage(String senderName, String rawContent, long msgId) {
+        if (listItems.isEmpty()) { callback.showAlert("Chuy\u1EC3n ti\u1EBFp", "Kh\u00F4ng c\u00F3 h\u1ED9i tho\u1EA1i n\u00E0o."); return; }
+        Dialog<ConvItem> dialog = new Dialog<>();
+        dialog.setTitle("Chuy\u1EC3n ti\u1EBFp tin nh\u1EAFn");
+        dialog.setHeaderText(null);
+
+        String preview = rawContent.length() > 80 ? rawContent.substring(0, 80) + "\u2026" : rawContent;
+        Label previewLbl = new Label("\"" + preview + "\"");
+        previewLbl.setWrapText(true);
+        previewLbl.setStyle("-fx-text-fill: #999; -fx-font-style: italic; -fx-padding: 0 0 8 0;");
+
+        ListView<ConvItem> pick = new ListView<>(listItems);
+        pick.setPrefHeight(220);
+        pick.setCellFactory(lv -> new javafx.scene.control.ListCell<ConvItem>() {
+            @Override protected void updateItem(ConvItem c, boolean empty) {
+                super.updateItem(c, empty);
+                setText(empty || c == null ? null : (c.isGroup ? "\uD83D\uDC65 " : "\uD83D\uDC64 ") + c.name);
+            }
+        });
+        VBox body = new VBox(8, previewLbl, new Label("G\u1EEDi \u0111\u1EBFn:"), pick);
+        body.setPadding(new Insets(14));
+        body.setPrefWidth(320);
+        dialog.getDialogPane().setContent(body);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        dialog.setResultConverter(btn -> btn == ButtonType.OK ? pick.getSelectionModel().getSelectedItem() : null);
+
+        dialog.showAndWait().ifPresent(target -> {
+            if (target == null) { callback.showAlert("Chuy\u1EC3n ti\u1EBFp", "Vui l\u00F2ng ch\u1ECDn ng\u01B0\u1EDDi nh\u1EADn."); return; }
+            String fwdContent = "[\u0110\u00E3 chuy\u1EC3n ti\u1EBFp t\u1EEB " + senderName + "]\n" + rawContent;
+            JsonObject req = new JsonObject();
+            if (target.isGroup) req.addProperty("groupId", target.uid);
+            else req.addProperty("receiverId", target.uid);
+            req.addProperty("content", fwdContent);
+            req.addProperty("messageType", "TEXT");
+            client.send(target.isGroup ? Protocol.TYPE_GROUP_MESSAGE : Protocol.TYPE_MESSAGE, req);
+            callback.showAlert("Chuy\u1EC3n ti\u1EBFp", "\u0110\u00E3 g\u1EEDi \u0111\u1EBFn " + target.name);
+        });
     }
 
     private void addTextContent(VBox bubbleBox, String content, boolean mine) {
@@ -1249,6 +1391,25 @@ public class ChatTab {
         }
     }
 
+    private void addIconContent(VBox bubbleBox, String content, boolean mine) {
+        String filename = content.substring(6, content.length() - 1);
+        try {
+            java.io.InputStream is = ChatTab.class.getResourceAsStream("/icons/" + filename);
+            if (is == null) { addTextContent(bubbleBox, "🖼 Icon", mine); return; }
+            Image img = new Image(is, 120, 120, true, true);
+            if (img.isError()) { addTextContent(bubbleBox, "🖼 Icon", mine); return; }
+            ImageView iv = new ImageView(img);
+            iv.setFitWidth(120);
+            iv.setFitHeight(120);
+            iv.setPreserveRatio(true);
+            iv.getStyleClass().add("bubble-image");
+            bubbleBox.getChildren().add(iv);
+            bubbleBox.setPadding(new Insets(6, 8, 4, 8));
+        } catch (Exception ex) {
+            addTextContent(bubbleBox, "🖼 Icon", mine);
+        }
+    }
+
     private void addFileContent(VBox bubbleBox, String content, boolean mine) {
         JsonObject meta = parseJsonObject(content);
         String fileName = meta != null && meta.has("fileName") ? meta.get("fileName").getAsString() : "file";
@@ -1275,6 +1436,12 @@ public class ChatTab {
 
     private String normalizeImageSource(String content) {
         if (content == null || content.isEmpty()) return "";
+        // Icon từ classpath /icons/
+        if (content.startsWith("[ICON:")) {
+            String filename = content.substring(6, content.length() - 1);
+            java.net.URL url = ChatTab.class.getResource("/icons/" + filename);
+            return url != null ? url.toExternalForm() : "";
+        }
         JsonObject meta = parseJsonObject(content);
         if (meta != null && meta.has("data")) {
             String mime = meta.has("mime") ? meta.get("mime").getAsString() : "image/png";
@@ -1421,7 +1588,10 @@ public class ChatTab {
     }
 
     private String previewForMessage(String messageType, String content) {
-        if ("IMAGE".equals(messageType)) return "\uD83D\uDDBC Anh";
+        if ("IMAGE".equals(messageType)) {
+            if (content != null && content.startsWith("[ICON:")) return "\uD83D\uDDBC Icon";
+            return "\uD83D\uDDBC \u1EA2nh";
+        }
         if ("FILE".equals(messageType)) {
             JsonObject meta = parseJsonObject(content);
             String fileName = meta != null && meta.has("fileName") ? meta.get("fileName").getAsString() : "file";
@@ -1489,7 +1659,15 @@ public class ChatTab {
         return makeAvatar(initials, color, size, online, null);
     }
 
-    private void sendRx(long mid, String rx) { if(active==null) return; JsonObject d=new JsonObject(); d.addProperty("receiverId",active.uid); d.addProperty("messageId",mid); d.addProperty("reaction",rx); client.send(Protocol.TYPE_REACTION,d); }
+    private void sendRx(long mid, String rx) {
+        if (active == null) return;
+        JsonObject d = new JsonObject();
+        if (active.isGroup) d.addProperty("groupId", active.uid);
+        else d.addProperty("receiverId", active.uid);
+        d.addProperty("messageId", mid);
+        d.addProperty("reaction", rx);
+        client.send(Protocol.TYPE_REACTION, d);
+    }
     private void unsend(long mid, HBox row) { JsonObject d=new JsonObject(); d.addProperty("receiverId",active!=null?active.uid:0); d.addProperty("messageId",mid); client.send(Protocol.TYPE_UNSEND,d); msgArea.getChildren().remove(row); }
 
     private void send() {
@@ -2120,7 +2298,12 @@ public class ChatTab {
         mute.setOnAction(e -> callback.showAlert("Th\u00F4ng b\u00E1o", "\u0110\u00E3 t\u1EAFt th\u00F4ng b\u00E1o cho " + c.name));
 
         MenuItem delete = new MenuItem("\uD83D\uDDD1 X\u00F3a");
-        delete.setOnAction(e -> removeConv(c.uid));
+        delete.setOnAction(e -> {
+            JsonObject req = new JsonObject();
+            req.addProperty("conversationId", c.uid);
+            client.send(Protocol.TYPE_CONVERSATION_DELETE, req);
+            removeConv(c.uid);
+        });
 
         menu.getItems().addAll(rename, pin, mute, new SeparatorMenuItem(), delete);
 

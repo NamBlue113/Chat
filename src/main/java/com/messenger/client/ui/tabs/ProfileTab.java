@@ -17,6 +17,7 @@ import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.stage.FileChooser;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -37,6 +38,7 @@ public class ProfileTab {
     private Label userIdLabel;
     private Label presenceLabel;
     private StackPane avatarPane;
+    private StackPane coverArea;
 
     public interface Callback {
         void showAlert(String title, String msg);
@@ -54,7 +56,7 @@ public class ProfileTab {
         root.getStyleClass().add("profile-root");
 
         // --- Cover photo area with overlay button ---
-        StackPane coverArea = new StackPane();
+        coverArea = new StackPane();
         coverArea.setMinHeight(200);
         coverArea.setMaxHeight(200);
         coverArea.getStyleClass().add("profile-cover");
@@ -144,13 +146,24 @@ public class ProfileTab {
         String avatarUrl = currentUser.getAvatarUrl();
         if (avatarUrl != null && !avatarUrl.isEmpty()) {
             try {
-                ImageView iv = new ImageView(new Image(avatarUrl, 100, 100, true, true, true));
-                iv.setFitWidth(100);
-                iv.setFitHeight(100);
-                Circle clip = new Circle(50, 50, 50);
-                iv.setClip(clip);
-                sp.getChildren().addAll(iv, border);
-                return sp;
+                Image img;
+                if (avatarUrl.startsWith("data:")) {
+                    // JavaFX Image không hỗ trợ data: URI — decode base64 thủ công
+                    int comma = avatarUrl.indexOf(',');
+                    byte[] bytes = Base64.getDecoder().decode(avatarUrl.substring(comma + 1));
+                    img = new Image(new ByteArrayInputStream(bytes));
+                } else {
+                    img = new Image(avatarUrl, 100, 100, true, true, true);
+                }
+                if (!img.isError()) {
+                    ImageView iv = new ImageView(img);
+                    iv.setFitWidth(100);
+                    iv.setFitHeight(100);
+                    Circle clip = new Circle(50, 50, 50);
+                    iv.setClip(clip);
+                    sp.getChildren().addAll(iv, border);
+                    return sp;
+                }
             } catch (Exception ignored) {}
         }
 
@@ -237,13 +250,29 @@ public class ProfileTab {
     }
 
     private void showCoverDialog() {
-        TextInputDialog d = new TextInputDialog("");
-        d.setTitle("\u0110\u1ED5i \u1EA3nh b\u00ECa");
-        d.setHeaderText("Nh\u1EADp URL \u1EA3nh b\u00ECa");
-        d.setContentText("(T\u00EDnh n\u0103ng \u0111ang ph\u00E1t tri\u1EC3n \u2014 nh\u1EADp URL \u0111\u1EC3 thay \u0111\u1ED5i m\u00E0u n\u1EC1n)");
-        d.showAndWait().ifPresent(url -> {
+        FileChooser fc = new FileChooser();
+        fc.setTitle("\u0110\u1ED5i \u1EA3nh b\u00ECa");
+        fc.getExtensionFilters().addAll(
+            new FileChooser.ExtensionFilter("Image Files", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp"),
+            new FileChooser.ExtensionFilter("All Files", "*.*")
+        );
+        File file = fc.showOpenDialog(client.getPrimaryStage());
+        if (file == null) return;
+        try {
+            byte[] bytes = readAllBytes(file);
+            Image img = new Image(new ByteArrayInputStream(bytes));
+            BackgroundImage bgImg = new BackgroundImage(
+                img,
+                BackgroundRepeat.NO_REPEAT, BackgroundRepeat.NO_REPEAT,
+                BackgroundPosition.CENTER,
+                new BackgroundSize(BackgroundSize.AUTO, BackgroundSize.AUTO, false, false, false, true)
+            );
+            coverArea.setStyle(null); // x\u00F3a gradient inline \u0111\u1EC3 Background API c\u00F3 hi\u1EC7u l\u1EF1c
+            coverArea.setBackground(new Background(bgImg));
             callback.showAlert("\u1EA2nh b\u00ECa", "\u0110\u00E3 c\u1EADp nh\u1EADt \u1EA3nh b\u00ECa!");
-        });
+        } catch (IOException e) {
+            callback.showAlert("L\u1ED7i", "Kh\u00F4ng th\u1EC3 \u0111\u1ECDc file: " + e.getMessage());
+        }
     }
 
     /**
